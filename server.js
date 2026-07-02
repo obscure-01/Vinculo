@@ -16,6 +16,7 @@ global.facebookApiStatus = {
   lastAttempt: null,
   lastResponseStatus: null
 };
+global.MANUAL_AUDIT_PERCENTAGE = process.env.MANUAL_AUDIT_PERCENTAGE ? parseInt(process.env.MANUAL_AUDIT_PERCENTAGE, 10) : 25;
 const authRouter = require('./routes/auth');
 const adminRouter = require('./routes/admin');
 const studentRouter = require('./routes/student');
@@ -140,6 +141,60 @@ async function checkAndInitializeDatabase() {
       ALTER TABLE task_activity DROP CONSTRAINT IF EXISTS task_activity_comment_status_check;
       ALTER TABLE task_activity ADD CONSTRAINT task_activity_comment_status_check CHECK (
         comment_status IN ('Not Checked', 'Comment Verified', 'Comment Not Found', 'YouTube Account Not Available', 'Verification Error', 'Not Attempted', 'Comment Detected', 'Comment Not Verified', 'Platform Not Available', 'Invalid URL', 'Video ID Extraction Failed', 'Video Not Found', 'Handle Mismatch', 'Verification Successful', 'Student Handle Missing', 'Comments Not Accessible', 'No Comments Retrieved', 'Configuration Error', 'Comments Disabled', 'API Quota Exceeded', 'API Not Enabled', 'API Key Invalid', 'Network Error', 'No Comments Available', 'Facebook Account Not Available', 'Post ID Extraction Failed', 'Post Not Found', 'Facebook API Error', 'Rate Limited')
+      );
+    `);
+    
+    // Auto-migrate Manual Audit System
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS verification_method VARCHAR(50) DEFAULT 'AUTOMATIC';`);
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS engagement_type VARCHAR(50) DEFAULT 'COMMENT';`);
+    
+    // Explicit migration: ensure historical records have valid values
+    await pool.query(`UPDATE tasks SET verification_method = 'AUTOMATIC' WHERE verification_method IS NULL;`);
+    await pool.query(`UPDATE tasks SET engagement_type = 'COMMENT' WHERE engagement_type IS NULL;`);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS manual_audits (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        task_title VARCHAR(255) NOT NULL,
+        task_platform VARCHAR(50) NOT NULL,
+        task_url TEXT NOT NULL,
+        engagement_type VARCHAR(50) NOT NULL,
+        student_platform_identifier VARCHAR(255),
+        status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+        is_selected_for_audit BOOLEAN DEFAULT FALSE,
+        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        reviewed_at TIMESTAMP,
+        reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        rejection_reason VARCHAR(100),
+        admin_notes TEXT,
+        CONSTRAINT unique_manual_audit UNIQUE (student_id, task_id, engagement_type)
+      );
+      
+      -- Auto-migrate existing manual_audits if columns missing
+      ALTER TABLE manual_audits ADD COLUMN IF NOT EXISTS student_platform_identifier VARCHAR(255);
+      
+      ALTER TABLE manual_audits DROP CONSTRAINT IF EXISTS check_manual_audit_status;
+      ALTER TABLE manual_audits ADD CONSTRAINT check_manual_audit_status CHECK (status IN ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED', 'CANCELLED'));
+      
+      ALTER TABLE manual_audits DROP CONSTRAINT IF EXISTS check_rejection_reason;
+      ALTER TABLE manual_audits ADD CONSTRAINT check_rejection_reason CHECK (rejection_reason IN ('Like not found', 'Engagement not visible', 'Wrong account', 'Account not accessible', 'Task expired', 'Already reviewed', 'Other'));
+      CREATE INDEX IF NOT EXISTS idx_manual_audits_student ON manual_audits(student_id);
+      CREATE INDEX IF NOT EXISTS idx_manual_audits_task ON manual_audits(task_id);
+      CREATE INDEX IF NOT EXISTS idx_manual_audits_status ON manual_audits(status);
+      CREATE INDEX IF NOT EXISTS idx_manual_audits_submitted ON manual_audits(submitted_at);
+      CREATE INDEX IF NOT EXISTS idx_manual_audits_platform ON manual_audits(task_platform);
+
+      CREATE TABLE IF NOT EXISTS manual_audit_history (
+        id SERIAL PRIMARY KEY,
+        audit_id INTEGER REFERENCES manual_audits(id) ON DELETE CASCADE,
+        previous_status VARCHAR(50),
+        new_status VARCHAR(50) NOT NULL,
+        reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        reason VARCHAR(100),
+        notes TEXT
       );
     `);
     console.log('Database constraints verified.');

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authenticateToken, requireRole } = require('../middleware');
+const manualAuditService = require('../services/manualAuditService');
 
 // Protect all routes with JWT and check for 'Admin' role
 router.use(authenticateToken, requireRole('Admin'));
@@ -57,7 +58,7 @@ router.get('/overview', async (req, res) => {
 
 // 2. Create Task
 router.post('/tasks', async (req, res) => {
-  const { title, platform, socialLink, durationDays } = req.body;
+  const { title, platform, socialLink, durationDays, verificationMethod, engagementType } = req.body;
 
   if (!title || !platform || !socialLink) {
     return res.status(400).json({ error: 'Title, platform, and social media link are required.' });
@@ -75,13 +76,18 @@ router.post('/tasks', async (req, res) => {
   const finalDurationDays = isNaN(parsedDuration) || parsedDuration <= 0 ? 7 : parsedDuration;
   const expiryDate = new Date(Date.now() + finalDurationDays * 24 * 60 * 60 * 1000);
 
+  // Validate verification method and engagement type
+  const vMethod = verificationMethod === 'MANUAL' ? 'MANUAL' : 'AUTOMATIC';
+  const validEngagements = ['LIKE', 'COMMENT', 'REACTION', 'SAVE', 'SHARE', 'FOLLOW'];
+  const eType = validEngagements.includes(engagementType) ? engagementType : 'COMMENT';
+
   try {
     const insertQuery = `
-      INSERT INTO tasks (title, platform, social_link, duration_days, expiry_date)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO tasks (title, platform, social_link, duration_days, expiry_date, verification_method, engagement_type)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
     `;
-    const result = await db.query(insertQuery, [title.trim(), normalizedPlatform, socialLink.trim(), finalDurationDays, expiryDate]);
+    const result = await db.query(insertQuery, [title.trim(), normalizedPlatform, socialLink.trim(), finalDurationDays, expiryDate, vMethod, eType]);
     res.status(201).json({
       message: 'Task created successfully.',
       task: result.rows[0]
@@ -480,6 +486,80 @@ router.get('/facebook-status', async (req, res) => {
   } catch (error) {
     console.error('Error fetching facebook status:', error);
     res.status(500).json({ error: 'Failed to retrieve facebook status.' });
+  }
+});
+
+// --- MANUAL ENGAGEMENT AUDIT SYSTEM ---
+
+// 13. Get Overview Stats
+router.get('/manual-audits/overview', async (req, res) => {
+  try {
+    const stats = await manualAuditService.getOverviewStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching manual audit overview:', error);
+    res.status(500).json({ error: 'Failed to retrieve overview stats.' });
+  }
+});
+
+// 14. Get Audit List (Paginated)
+router.get('/manual-audits', async (req, res) => {
+  const { limit = 20, offset = 0, status, is_selected_for_audit } = req.query;
+  try {
+    const result = await manualAuditService.getManualAudits(limit, offset, status, is_selected_for_audit);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching manual audits:', error);
+    res.status(500).json({ error: 'Failed to fetch manual audits.' });
+  }
+});
+
+// 15. Generate Random Audit Batch
+router.post('/manual-audits/generate-batch', async (req, res) => {
+  try {
+    const percentage = global.MANUAL_AUDIT_PERCENTAGE || 25;
+    const result = await manualAuditService.generateAuditBatch(percentage);
+    res.json(result);
+  } catch (error) {
+    console.error('Error generating audit batch:', error);
+    res.status(500).json({ error: 'Failed to generate audit batch.' });
+  }
+});
+
+// 16. Batch Review (Approve/Reject)
+router.post('/manual-audits/batch-review', async (req, res) => {
+  const { auditIds, action, reason, notes } = req.body;
+  
+  if (!auditIds || !Array.isArray(auditIds) || auditIds.length === 0) {
+    return res.status(400).json({ error: 'No audits selected.' });
+  }
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action.' });
+  }
+  if (action === 'reject' && !reason) {
+    return res.status(400).json({ error: 'Reason is mandatory for rejection.' });
+  }
+  if (action === 'reject' && reason === 'Other' && !notes) {
+    return res.status(400).json({ error: 'Notes are mandatory when rejection reason is Other.' });
+  }
+
+  try {
+    const result = await manualAuditService.batchReviewAudits(auditIds, action, reason, notes, req.user.id);
+    res.json(result);
+  } catch (error) {
+    console.error('Transaction error in batch review:', error.message);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// 17. Get specific student's audit history
+router.get('/manual-audits/student/:id', async (req, res) => {
+  try {
+    const result = await manualAuditService.getStudentAudits(req.params.id);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching student manual audits:', error);
+    res.status(500).json({ error: 'Failed to retrieve student audits.' });
   }
 });
 

@@ -218,14 +218,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 const platformIcon = getPlatformIcon(task.platform);
                 const isOpened = task.status === 'OPENED';
                 
-                // Button styling based on status
-                const buttonText = isOpened ? 'Mark Complete' : 'Open Task';
-                const buttonClass = isOpened
-                    ? 'bg-tertiary text-on-tertiary hover:bg-on-tertiary-fixed-variant'
-                    : 'bg-primary text-on-primary hover:bg-on-primary-fixed-variant';
-                const actionHandler = isOpened
-                    ? `completeTask(${task.id})`
-                    : `openTask(${task.id})`;
+                // Button styling based on status and verification method
+                const isManual = task.verification_method === 'MANUAL';
+                
+                let buttonText = 'Open Task';
+                let actionHandler = `openTask(${task.id})`;
+                let buttonClass = 'bg-primary text-on-primary hover:bg-on-primary-fixed-variant';
+
+                if (isOpened) {
+                    if (isManual) {
+                        buttonText = 'Submit for Review';
+                        buttonClass = 'bg-secondary text-on-secondary hover:bg-secondary-fixed-dim';
+                        actionHandler = `openManualAuditModal(${task.id}, '${escapeHTML(task.title).replace(/'/g, "\\'")}', '${task.platform}', '${task.engagement_type}')`;
+                    } else {
+                        buttonText = 'Mark Complete';
+                        buttonClass = 'bg-tertiary text-on-tertiary hover:bg-on-tertiary-fixed-variant';
+                        actionHandler = `completeTask(${task.id})`;
+                    }
+                }
 
                 return `
                     <div class="bg-surface border border-outline-variant p-4 flex items-center justify-between hover:bg-surface-container-low transition-colors rounded-DEFAULT">
@@ -277,6 +287,40 @@ document.addEventListener('DOMContentLoaded', () => {
             showAlert('Failed to open task. Please try again.', true);
         }
     };
+
+    // Manual Audit Modal Logic
+    const manualAuditModal = document.getElementById('manual-audit-modal');
+    let currentManualAuditTaskId = null;
+
+    window.openManualAuditModal = function(taskId, title, platform, engagementType) {
+        currentManualAuditTaskId = taskId;
+        document.getElementById('modal-task-title').textContent = title;
+        document.getElementById('modal-platform').textContent = platform;
+        document.getElementById('modal-engagement-type').textContent = engagementType;
+        manualAuditModal.classList.remove('hidden');
+    };
+
+    function closeManualAuditModal() {
+        manualAuditModal.classList.add('hidden');
+        currentManualAuditTaskId = null;
+    }
+
+    document.getElementById('close-manual-audit-btn')?.addEventListener('click', closeManualAuditModal);
+    document.getElementById('cancel-manual-audit-btn')?.addEventListener('click', closeManualAuditModal);
+    document.getElementById('manual-audit-overlay')?.addEventListener('click', closeManualAuditModal);
+
+    document.getElementById('confirm-manual-audit-btn')?.addEventListener('click', async () => {
+        if (!currentManualAuditTaskId) return;
+        try {
+            const data = await apiRequest(`/api/student/tasks/${currentManualAuditTaskId}/manual-audit`, { method: 'POST' });
+            showAlert(data.message, data.status ? true : false); // If status exists, it's a duplicate, show as warning
+            closeManualAuditModal();
+            fetchPendingTasks();
+        } catch (error) {
+            showAlert(error.message, true);
+            closeManualAuditModal();
+        }
+    });
 
     // Complete Task Action
     window.completeTask = async function(taskId) {

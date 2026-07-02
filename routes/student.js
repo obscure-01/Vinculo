@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authenticateToken, requireRole } = require('../middleware');
+const manualAuditService = require('../services/manualAuditService');
 
 // Protect all routes with JWT and check for 'Student' role
 router.use(authenticateToken, requireRole('Student'));
@@ -115,6 +116,8 @@ router.get('/tasks', async (req, res) => {
         t.platform, 
         t.social_link, 
         t.expiry_date,
+        t.verification_method,
+        t.engagement_type,
         COALESCE(ta.status, 'PENDING') as status,
         ta.opened_at
       FROM tasks t
@@ -142,6 +145,8 @@ router.get('/tasks/completed', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
+        t.verification_method,
+        t.engagement_type,
         ta.completed_at,
         ta.time_spent,
         ta.comment_status,
@@ -268,19 +273,32 @@ router.post('/tasks/:id/complete', async (req, res) => {
 
     await db.query('COMMIT');
 
-    res.json({
-      message: 'Task completed successfully! +10 Points awarded.',
-      activity: updatedActivity.rows[0]
-    });
-
+    res.json({ message: 'Task marked as completed successfully! You earned 10 points.' });
   } catch (error) {
-    if (db) await db.query('ROLLBACK');
+    await db.query('ROLLBACK');
     console.error('Error completing task:', error);
-    res.status(500).json({ error: 'An error occurred during task completion.' });
+    res.status(500).json({ error: 'Failed to record task completion.' });
   }
 });
 
-// 5. Leaderboard - Ranked by points
+// 5. Submit Manual Audit
+router.post('/tasks/:id/manual-audit', async (req, res) => {
+  try {
+    const result = await manualAuditService.submitAudit(req.user.id, req.params.id);
+    if (result.duplicate) {
+      return res.json({ message: result.message, status: result.status });
+    }
+    res.status(201).json({ message: result.message, audit: result.audit });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error submitting manual audit:', error);
+    res.status(500).json({ error: 'Failed to submit manual audit.' });
+  }
+});
+
+// 6. Leaderboard - Ranked by points
 router.get('/leaderboard', async (req, res) => {
   try {
     const leaderboardQuery = `

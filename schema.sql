@@ -1,6 +1,8 @@
 -- EngageHub Database Schema
 
 -- Drop tables if they exist (for easy re-initialization)
+DROP TABLE IF EXISTS manual_audit_history CASCADE;
+DROP TABLE IF EXISTS manual_audits CASCADE;
 DROP TABLE IF EXISTS task_activity CASCADE;
 DROP TABLE IF EXISTS tasks CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
@@ -29,6 +31,8 @@ CREATE TABLE tasks (
   social_link TEXT NOT NULL,
   duration_days INTEGER NOT NULL DEFAULT 7,
   expiry_date TIMESTAMP NOT NULL,
+  verification_method VARCHAR(50) DEFAULT 'AUTOMATIC' CHECK (verification_method IN ('AUTOMATIC', 'MANUAL')),
+  engagement_type VARCHAR(50) DEFAULT 'COMMENT' CHECK (engagement_type IN ('LIKE', 'COMMENT', 'REACTION', 'SAVE', 'SHARE', 'FOLLOW')),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -83,4 +87,42 @@ CREATE TABLE IF NOT EXISTS facebook_api_usage (
   response_code INTEGER,
   error_message TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Manual Audits Table
+CREATE TABLE IF NOT EXISTS manual_audits (
+  id SERIAL PRIMARY KEY,
+  student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  task_title VARCHAR(255) NOT NULL,
+  task_platform VARCHAR(50) NOT NULL CHECK (task_platform IN ('Facebook', 'Instagram', 'YouTube', 'LinkedIn')),
+  task_url TEXT NOT NULL,
+  engagement_type VARCHAR(50) NOT NULL CHECK (engagement_type IN ('LIKE', 'COMMENT', 'REACTION', 'SAVE', 'SHARE', 'FOLLOW')),
+  student_platform_identifier VARCHAR(255),
+  status VARCHAR(50) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED', 'CANCELLED')),
+  is_selected_for_audit BOOLEAN DEFAULT FALSE,
+  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TIMESTAMP,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  rejection_reason VARCHAR(100) CHECK (rejection_reason IN ('Like not found', 'Engagement not visible', 'Wrong account', 'Account not accessible', 'Task expired', 'Already reviewed', 'Other')),
+  admin_notes TEXT,
+  CONSTRAINT unique_manual_audit UNIQUE (student_id, task_id, engagement_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_manual_audits_student ON manual_audits(student_id);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_task ON manual_audits(task_id);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_status ON manual_audits(status);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_submitted ON manual_audits(submitted_at);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_platform ON manual_audits(task_platform);
+
+-- Manual Audit History Table
+CREATE TABLE IF NOT EXISTS manual_audit_history (
+  id SERIAL PRIMARY KEY,
+  audit_id INTEGER REFERENCES manual_audits(id) ON DELETE CASCADE,
+  previous_status VARCHAR(50),
+  new_status VARCHAR(50) NOT NULL,
+  reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  reason VARCHAR(100),
+  notes TEXT
 );

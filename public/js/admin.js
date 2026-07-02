@@ -63,6 +63,13 @@ document.addEventListener('DOMContentLoaded', () => {
             title: 'Verification Audit Logs',
             subtitle: 'Permanent audit records of comment verification attempts.'
         },
+        manualAudits: {
+            nav: document.getElementById('nav-manual-audits'),
+            mobNav: document.getElementById('mobile-nav-manual-audits'),
+            section: document.getElementById('view-manual-audits-section'),
+            title: 'Manual Engagement Audits',
+            subtitle: 'Review manual task submissions pending verification.'
+        },
         settings: {
             nav: document.getElementById('nav-settings'),
             mobNav: document.getElementById('mobile-nav-settings'),
@@ -130,6 +137,8 @@ document.addEventListener('DOMContentLoaded', () => {
             fetchLeaderboard();
         } else if (viewKey === 'verificationLogs') {
             fetchVerificationLogs();
+        } else if (viewKey === 'manualAudits') {
+            fetchManualAuditsOverview();
         } else if (viewKey === 'settings') {
             fetchSettings();
         }
@@ -1060,11 +1069,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // FORM SUBMISSIONS
     // ──────────────────────────────────────────────────────────
 
-    async function handlePublishTask(title, platform, socialLink, durationDays) {
+    async function handlePublishTask(title, platform, socialLink, durationDays, verificationMethod, engagementType) {
         try {
             const data = await apiRequest('/api/admin/tasks', {
                 method: 'POST',
-                body: JSON.stringify({ title, platform, socialLink, durationDays })
+                body: JSON.stringify({ title, platform, socialLink, durationDays, verification_method: verificationMethod, engagement_type: engagementType })
             });
 
             showToast(data.message);
@@ -1111,8 +1120,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const durationDays = durationSelect === 'custom' 
             ? document.getElementById('quickCustomDuration').value 
             : durationSelect;
+        const verificationMethod = document.getElementById('quickVerificationMethod').value;
+        const engagementType = document.getElementById('quickEngagementType').value;
 
-        const success = await handlePublishTask(title, platform, socialLink, durationDays);
+        const success = await handlePublishTask(title, platform, socialLink, durationDays, verificationMethod, engagementType);
         if (success) {
             document.getElementById('quick-create-form').reset();
             document.getElementById('quickCustomDurationContainer').classList.add('hidden');
@@ -1130,8 +1141,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const durationDays = durationSelect === 'custom' 
             ? document.getElementById('customDuration').value 
             : durationSelect;
+        const verificationMethod = document.getElementById('verificationMethod').value;
+        const engagementType = document.getElementById('engagementType').value;
 
-        const success = await handlePublishTask(title, platform, socialLink, durationDays);
+        const success = await handlePublishTask(title, platform, socialLink, durationDays, verificationMethod, engagementType);
         if (success) {
             document.getElementById('standalone-create-form').reset();
             document.getElementById('customDurationContainer').classList.add('hidden');
@@ -1155,4 +1168,220 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize: Start on Dashboard View
     switchView('dashboard');
+    // 9. Manual Audits logic
+    let currentBatchData = null;
+
+    async function fetchManualAuditsOverview() {
+        try {
+            const data = await apiRequest('/api/admin/manual-audits/overview');
+            document.getElementById('manual-audit-pending-count').textContent = data.pendingCount;
+            document.getElementById('manual-audit-approved-count').textContent = data.approvedToday;
+            document.getElementById('manual-audit-rejected-count').textContent = data.rejectedToday;
+
+            // Also load the list
+            fetchPendingAuditsList();
+        } catch (error) {
+            showToast('Failed to load manual audits overview', true);
+        }
+    }
+
+    async function fetchPendingAuditsList(page = 1) {
+        const listContainer = document.getElementById('all-pending-audits-list');
+        listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-on-surface-variant">Loading pending audits...</td></tr>';
+        
+        try {
+            const data = await apiRequest(`/api/admin/manual-audits?status=PENDING&page=${page}&limit=50`);
+            const audits = data.audits;
+
+            if (audits.length === 0) {
+                listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-on-surface-variant">No pending manual audits.</td></tr>';
+                return;
+            }
+
+            listContainer.innerHTML = audits.map(audit => {
+                const dateStr = new Date(audit.created_at).toLocaleString();
+                const badge = getPlatformBadge(audit.platform);
+
+                return `
+                    <tr class="hover:bg-surface-container-low/50 transition-colors">
+                        <td class="px-6 py-4 text-xs font-mono text-secondary">#MA-${audit.id}</td>
+                        <td class="px-6 py-4 font-semibold text-on-surface">${escapeHTML(audit.student_name)}</td>
+                        <td class="px-6 py-4">
+                            <div class="font-medium text-on-surface text-sm mb-1">${escapeHTML(audit.task_title)}</div>
+                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold border ${badge.class}">
+                                ${audit.platform} - ${audit.engagement_type}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-xs text-secondary">${dateStr}</td>
+                        <td class="px-6 py-4 text-right">
+                            <a href="${audit.social_link}" target="_blank" class="inline-flex items-center justify-center p-1.5 bg-primary-container text-on-primary-container hover:bg-primary hover:text-on-primary transition-colors rounded" title="View Social Link">
+                                <span class="material-symbols-outlined text-[18px]">open_in_new</span>
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+        } catch (error) {
+            listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-error">Failed to load pending audits.</td></tr>';
+        }
+    }
+
+    document.getElementById('btn-generate-audit-batch')?.addEventListener('click', async () => {
+        try {
+            const data = await apiRequest('/api/admin/manual-audits/generate-batch', { method: 'POST' });
+            if (!data.batch || data.batch.length === 0) {
+                showToast('No pending audits available for review at this time.', false);
+                return;
+            }
+
+            currentBatchData = data.batch.map(item => ({ ...item, decision: null, rejectionReason: null, notes: null }));
+            renderBatchWorkspace();
+
+            document.getElementById('all-pending-audits-view').classList.add('hidden');
+            document.getElementById('batch-review-workspace').classList.remove('hidden');
+            document.getElementById('btn-generate-audit-batch').disabled = true;
+
+        } catch (error) {
+            showToast(error.message, true);
+        }
+    });
+
+    function renderBatchWorkspace() {
+        const listContainer = document.getElementById('batch-review-list');
+        const submitBtn = document.getElementById('btn-submit-batch');
+        const statusCount = document.getElementById('batch-status-count');
+
+        let reviewedCount = 0;
+
+        listContainer.innerHTML = currentBatchData.map((item, index) => {
+            const badge = getPlatformBadge(item.platform);
+            if (item.decision !== null) reviewedCount++;
+
+            const approveClass = item.decision === 'APPROVED' ? 'bg-tertiary text-on-tertiary border-tertiary' : 'bg-surface text-secondary hover:bg-tertiary-container border-outline-variant';
+            const rejectClass = item.decision === 'REJECTED' ? 'bg-error text-on-error border-error' : 'bg-surface text-secondary hover:bg-error-container border-outline-variant';
+
+            return `
+                <tr class="${item.decision ? 'bg-surface' : 'bg-surface-container-low'} border-b border-surface-container">
+                    <td class="px-6 py-4 align-top">
+                        <div class="font-bold text-on-surface mb-1">${escapeHTML(item.student_name)}</div>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold border ${badge.class}">
+                            ${item.platform}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 align-top">
+                        <div class="font-medium text-on-surface text-sm mb-1">${escapeHTML(item.task_title)}</div>
+                        <div class="text-xs text-secondary mb-2">Type: <strong>${item.engagement_type}</strong></div>
+                        <a href="${item.social_link}" target="_blank" class="inline-flex items-center gap-1 text-xs text-primary hover:underline font-semibold">
+                            Open Link <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                        </a>
+                    </td>
+                    <td class="px-6 py-4 align-top text-center">
+                        <div class="flex flex-col gap-2 max-w-[120px] mx-auto">
+                            <button onclick="setBatchDecision(${index}, 'APPROVED')" class="px-3 py-1.5 text-xs font-bold border transition-colors rounded ${approveClass}">APPROVE</button>
+                            <button onclick="setBatchDecision(${index}, 'REJECTED')" class="px-3 py-1.5 text-xs font-bold border transition-colors rounded ${rejectClass}">REJECT</button>
+                        </div>
+                    </td>
+                    <td class="px-6 py-4 align-top">
+                        <div class="${item.decision === 'REJECTED' ? 'block' : 'hidden'} space-y-2 max-w-xs">
+                            <select id="reason-${index}" onchange="updateBatchReason(${index}, this.value)" class="w-full text-xs p-1.5 border border-outline-variant rounded bg-surface">
+                                <option value="" disabled ${!item.rejectionReason ? 'selected' : ''}>Select Reason</option>
+                                <option value="Like not found" ${item.rejectionReason === 'Like not found' ? 'selected' : ''}>Like not found</option>
+                                <option value="Engagement not visible" ${item.rejectionReason === 'Engagement not visible' ? 'selected' : ''}>Engagement not visible</option>
+                                <option value="Wrong account" ${item.rejectionReason === 'Wrong account' ? 'selected' : ''}>Wrong account</option>
+                                <option value="Account not accessible" ${item.rejectionReason === 'Account not accessible' ? 'selected' : ''}>Account not accessible</option>
+                                <option value="Task expired" ${item.rejectionReason === 'Task expired' ? 'selected' : ''}>Task expired</option>
+                                <option value="Already reviewed" ${item.rejectionReason === 'Already reviewed' ? 'selected' : ''}>Already reviewed</option>
+                                <option value="Other" ${item.rejectionReason === 'Other' ? 'selected' : ''}>Other</option>
+                            </select>
+                            <input type="text" id="notes-${index}" oninput="updateBatchNotes(${index}, this.value)" value="${item.notes || ''}" placeholder="Optional notes..." class="w-full text-xs p-1.5 border border-outline-variant rounded bg-surface ${item.rejectionReason === 'Other' ? 'block' : 'hidden'}">
+                        </div>
+                        <div class="${item.decision === 'APPROVED' ? 'block' : 'hidden'} text-xs text-tertiary font-semibold flex items-center gap-1">
+                            <span class="material-symbols-outlined text-[14px]">check_circle</span> Approved
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        statusCount.textContent = `${reviewedCount} / ${currentBatchData.length} Reviewed`;
+
+        // Validation for submit button
+        const allReviewed = currentBatchData.every(item => item.decision !== null);
+        const allRejectionsValid = currentBatchData.every(item => {
+            if (item.decision === 'REJECTED') {
+                if (!item.rejectionReason || item.rejectionReason.trim() === '') return false;
+                if (item.rejectionReason === 'Other' && (!item.notes || item.notes.trim() === '')) return false;
+                return true;
+            }
+            return true;
+        });
+
+        submitBtn.disabled = !(allReviewed && allRejectionsValid);
+    }
+
+    window.setBatchDecision = function(index, decision) {
+        currentBatchData[index].decision = decision;
+        if (decision === 'APPROVED') {
+            currentBatchData[index].rejectionReason = null;
+            currentBatchData[index].notes = null;
+        }
+        renderBatchWorkspace();
+    };
+
+    window.updateBatchReason = function(index, reason) {
+        currentBatchData[index].rejectionReason = reason;
+        renderBatchWorkspace(); // re-render to show/hide notes input and validate
+    };
+
+    window.updateBatchNotes = function(index, notes) {
+        currentBatchData[index].notes = notes;
+        // Don't re-render on input to avoid losing focus
+        // We validate on submit anyway or the select change already triggered validation check
+        const submitBtn = document.getElementById('btn-submit-batch');
+        const allReviewed = currentBatchData.every(item => item.decision !== null);
+        const allRejectionsValid = currentBatchData.every(item => {
+            if (item.decision === 'REJECTED') {
+                return item.rejectionReason && item.rejectionReason.trim() !== '';
+            }
+            return true;
+        });
+        submitBtn.disabled = !(allReviewed && allRejectionsValid);
+    };
+
+    document.getElementById('btn-cancel-batch')?.addEventListener('click', () => {
+        if (confirm('Are you sure you want to cancel this batch review? Your progress will be lost.')) {
+            closeBatchWorkspace();
+        }
+    });
+
+    document.getElementById('btn-submit-batch')?.addEventListener('click', async () => {
+        try {
+            const reviews = currentBatchData.map(item => ({
+                auditId: item.id,
+                decision: item.decision,
+                rejectionReason: item.rejectionReason,
+                notes: item.notes
+            }));
+
+            const data = await apiRequest('/api/admin/manual-audits/batch-review', {
+                method: 'POST',
+                body: JSON.stringify({ reviews })
+            });
+
+            showToast(data.message, false);
+            closeBatchWorkspace();
+            fetchManualAuditsOverview(); // refresh overview and list
+        } catch (error) {
+            showToast(error.message, true);
+        }
+    });
+
+    function closeBatchWorkspace() {
+        currentBatchData = null;
+        document.getElementById('batch-review-workspace').classList.add('hidden');
+        document.getElementById('all-pending-audits-view').classList.remove('hidden');
+        document.getElementById('btn-generate-audit-batch').disabled = false;
+    }
+
 });
