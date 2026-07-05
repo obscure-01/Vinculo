@@ -60,12 +60,12 @@ $assetsDir = Join-Path $outputDir "assets\logo"
 if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir | Out-Null }
 
 # 1. Full Logos
-$fullLogoDest1 = Join-Path $assetsDir "engagehub-logo.png"
+$fullLogoDest1 = Join-Path $assetsDir "vinculo-logo.png"
 Copy-Item -Path $fullLogoPath -Destination $fullLogoDest1 -Force
 Write-Host "Copied $fullLogoDest1"
 
-Resize-Image -sourcePath $fullLogoPath -destPath (Join-Path $assetsDir "engagehub-logo-512.png") -maxWidth 512 -maxHeight 512 -isFavicon $false
-Resize-Image -sourcePath $fullLogoPath -destPath (Join-Path $assetsDir "engagehub-logo-256.png") -maxWidth 256 -maxHeight 256 -isFavicon $false
+Resize-Image -sourcePath $fullLogoPath -destPath (Join-Path $assetsDir "vinculo-logo-512.png") -maxWidth 512 -maxHeight 512 -isFavicon $false
+Resize-Image -sourcePath $fullLogoPath -destPath (Join-Path $assetsDir "vinculo-logo-256.png") -maxWidth 256 -maxHeight 256 -isFavicon $false
 
 # 2. Favicons
 Resize-Image -sourcePath $symbolLogoPath -destPath (Join-Path $outputDir "favicon.ico") -maxWidth 32 -maxHeight 32 -isFavicon $true
