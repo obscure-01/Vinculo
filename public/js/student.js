@@ -12,86 +12,51 @@ document.addEventListener('DOMContentLoaded', () => {
     avatarContainer.textContent = userInitials;
 
     // DOM Elements - Sidebar Navigation (Desktop & Mobile)
-    const views = {
-        dashboard: {
-            nav: document.getElementById('nav-dashboard'),
-            mobNav: document.getElementById('mobile-nav-dashboard'),
-            section: document.getElementById('view-dashboard-section')
-        },
-        tasks: {
-            nav: document.getElementById('nav-tasks'),
-            mobNav: document.getElementById('mobile-nav-tasks'),
-            section: document.getElementById('view-tasks-section')
-        },
-        completed: {
-            nav: document.getElementById('nav-completed'),
-            mobNav: document.getElementById('mobile-nav-completed'),
-            section: document.getElementById('view-completed-section')
-        },
-        leaderboard: {
-            nav: document.getElementById('nav-leaderboard'),
-            mobNav: document.getElementById('mobile-nav-leaderboard'),
-            section: document.getElementById('view-leaderboard-section')
-        },
-        profile: {
-            nav: document.getElementById('nav-profile'),
-            mobNav: document.getElementById('mobile-nav-profile'),
-            section: document.getElementById('view-profile-section')
-        }
-    };
-
-    // Navigation controller
-    function switchView(viewKey) {
-        Object.keys(views).forEach(key => {
-            const v = views[key];
-            if (key === viewKey) {
-                v.section.classList.remove('hidden');
-                if (v.nav) {
-                    v.nav.classList.add('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.nav.classList.remove('text-secondary-fixed-dim', 'font-normal');
-                }
-                if (v.mobNav) {
-                    v.mobNav.classList.add('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.mobNav.classList.remove('text-secondary-fixed-dim', 'font-normal');
-                }
-            } else {
-                v.section.classList.add('hidden');
-                if (v.nav) {
-                    v.nav.classList.remove('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.nav.classList.add('text-secondary-fixed-dim', 'font-normal');
-                }
-                if (v.mobNav) {
-                    v.mobNav.classList.remove('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.mobNav.classList.add('text-secondary-fixed-dim', 'font-normal');
-                }
-            }
-        });
-
-        // Load data relevant to view
-        if (viewKey === 'dashboard') {
+        // Register Views
+    ViewManager.registerView('dashboard', {
+        nav: document.getElementById('nav-dashboard'),
+        mobNav: document.getElementById('mobile-nav-dashboard'),
+        section: document.getElementById('view-dashboard-section'),
+        onEnter: () => {
             fetchWelcomeDashboard();
             fetchPendingTasks();
             fetchLeaderboardSnippet();
             fetchProfileSnippet();
-        } else if (viewKey === 'tasks') {
-            fetchPendingTasks();
-        } else if (viewKey === 'completed') {
-            fetchCompletedTasks();
-        } else if (viewKey === 'leaderboard') {
-            fetchFullLeaderboard();
-        } else if (viewKey === 'profile') {
-            fetchFullProfile();
         }
+    });
 
-        // Close mobile sidebar if open
-        document.getElementById('mobile-sidebar').classList.add('hidden');
-    }
+    ViewManager.registerView('tasks', {
+        nav: document.getElementById('nav-tasks'),
+        mobNav: document.getElementById('mobile-nav-tasks'),
+        section: document.getElementById('view-tasks-section'),
+        onEnter: fetchPendingTasks
+    });
+    
+    ViewManager.registerView('task-progress', {
+        nav: document.getElementById('nav-task-progress'),
+        mobNav: document.getElementById('mobile-nav-task-progress'),
+        section: document.getElementById('view-task-progress-section')
+    });
 
-    // Attach click events
-    Object.keys(views).forEach(key => {
-        const v = views[key];
-        if (v.nav) v.nav.addEventListener('click', () => switchView(key));
-        if (v.mobNav) v.mobNav.addEventListener('click', () => switchView(key));
+    ViewManager.registerView('completed', {
+        nav: document.getElementById('nav-completed'),
+        mobNav: document.getElementById('mobile-nav-completed'),
+        section: document.getElementById('view-completed-section'),
+        onEnter: fetchCompletedTasks
+    });
+
+    ViewManager.registerView('leaderboard', {
+        nav: document.getElementById('nav-leaderboard'),
+        mobNav: document.getElementById('mobile-nav-leaderboard'),
+        section: document.getElementById('view-leaderboard-section'),
+        onEnter: fetchFullLeaderboard
+    });
+
+    ViewManager.registerView('profile', {
+        nav: document.getElementById('nav-profile'),
+        mobNav: document.getElementById('mobile-nav-profile'),
+        section: document.getElementById('view-profile-section'),
+        onEnter: fetchFullProfile
     });
 
     // Mobile menu toggles
@@ -102,6 +67,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('mobile-menu-close').addEventListener('click', () => {
         mobileSidebar.classList.add('hidden');
     });
+    // Removed closing via mobileSidebar body click because ViewManager handles it on navigation.
+    // However, if they just click the backdrop, we can still hide it:
     mobileSidebar.addEventListener('click', (e) => {
         if (e.target === mobileSidebar) mobileSidebar.classList.add('hidden');
     });
@@ -111,62 +78,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-mobile-logout').addEventListener('click', logout);
 
     // Dashboard shortcuts
-    document.getElementById('btn-view-all-pending').addEventListener('click', () => switchView('tasks'));
-    document.getElementById('btn-view-full-leaderboard').addEventListener('click', () => switchView('leaderboard'));
-
-    // Notification Alerts
-    const alertBanner = document.getElementById('student-alert');
-    const alertText = document.getElementById('alert-text');
-    const alertIcon = document.getElementById('alert-icon');
+    document.getElementById('btn-view-all-pending').addEventListener('click', () => ViewManager.switchView('tasks'));
+    document.getElementById('btn-view-full-leaderboard').addEventListener('click', () => ViewManager.switchView('leaderboard'));
 
     function showAlert(message, isError = false) {
-        alertText.textContent = message;
-        if (isError) {
-            alertIcon.textContent = 'warning';
-            alertBanner.className = 'mb-6 border-l-4 border-error bg-error-container text-on-error-container p-4 flex items-start justify-between shadow-[0_2px_6px_rgba(0,0,0,0.05)] rounded-DEFAULT';
-        } else {
-            alertIcon.textContent = 'check_circle';
-            alertBanner.className = 'mb-6 border-l-4 border-tertiary bg-tertiary-container text-on-tertiary-container p-4 flex items-start justify-between shadow-[0_2px_6px_rgba(0,0,0,0.05)] rounded-DEFAULT';
-        }
-        alertBanner.classList.remove('hidden');
-        // Scroll to top to see notification
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        // Automatically hide success alerts after 6s
-        if (!isError) {
-            setTimeout(() => alertBanner.classList.add('hidden'), 6000);
-        }
-    }
-
-    // API Helper utility
-    async function apiRequest(url, options = {}) {
-        const token = getToken();
-        const headers = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        };
-        const config = { ...options, headers: { ...headers, ...options.headers } };
-
-        try {
-            const response = await fetch(url, config);
-            const data = await response.json();
-            if (!response.ok) {
-                if (response.status === 401 || response.status === 403) {
-                    clearAuth();
-                    window.location.href = '/';
-                }
-                throw new Error(data.error || 'Server error');
-            }
-            return data;
-        } catch (error) {
-            console.error(`API Error for ${url}:`, error);
-            throw error;
-        }
+        UI.Toast.show({ message, type: isError ? 'error' : 'success' });
     }
 
     // ──────────────────────────────────────────────────────────
     // DATA FETCHERS & RENDERING
     // ──────────────────────────────────────────────────────────
-
     // Platform icon helper
     function getPlatformIcon(platform) {
         const plat = platform.toLowerCase();
@@ -194,20 +115,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const dbGrid = document.getElementById('dashboard-tasks-grid');
         const allGrid = document.getElementById('all-tasks-grid');
 
-        dbGrid.innerHTML = '<p class="text-sm text-on-surface-variant py-4">Loading tasks...</p>';
-        allGrid.innerHTML = '<p class="text-sm text-on-surface-variant py-4">Loading tasks...</p>';
+        const loadingState = UI.State.empty({ icon: 'hourglass_empty', title: 'Loading...', description: 'Fetching your tasks.' });
+        dbGrid.innerHTML = loadingState;
+        allGrid.innerHTML = loadingState;
 
         try {
             const tasks = await apiRequest('/api/student/tasks');
             
             if (tasks.length === 0) {
-                const emptyHTML = `
-                    <div class="bg-surface border border-outline-variant p-6 text-center rounded-DEFAULT">
-                        <span class="material-symbols-outlined text-4xl text-tertiary mb-2">task_alt</span>
-                        <p class="font-semibold text-on-surface text-base">All Caught Up!</p>
-                        <p class="text-xs text-on-surface-variant mt-1">There are no pending tasks for you right now.</p>
-                    </div>
-                `;
+                const emptyHTML = UI.State.empty({
+                    icon: 'task_alt',
+                    title: 'All Caught Up!',
+                    description: 'There are no pending tasks for you right now.'
+                });
                 dbGrid.innerHTML = emptyHTML;
                 allGrid.innerHTML = emptyHTML;
                 return;
@@ -269,8 +189,9 @@ document.addEventListener('DOMContentLoaded', () => {
             allGrid.innerHTML = buildCards(tasks);
 
         } catch (error) {
-            dbGrid.innerHTML = '<p class="text-sm text-error py-4">Failed to load tasks.</p>';
-            allGrid.innerHTML = '<p class="text-sm text-error py-4">Failed to load tasks.</p>';
+            const errState = UI.State.error({ title: 'Failed to load tasks', description: error.message });
+            dbGrid.innerHTML = errState;
+            allGrid.innerHTML = errState;
         }
     }
 
@@ -340,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. Completed Tasks list
     async function fetchCompletedTasks() {
         const completedList = document.getElementById('completed-tasks-list');
-        completedList.innerHTML = '<p class="text-sm text-on-surface-variant py-4">Loading completed tasks...</p>';
+        completedList.innerHTML = UI.State.empty({ icon: 'hourglass_empty', title: 'Loading...', description: 'Fetching completed tasks.' });
 
         try {
             const tasks = await apiRequest('/api/student/tasks/completed');
@@ -418,7 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }).join('');
 
         } catch (error) {
-            completedList.innerHTML = '<p class="text-sm text-error py-4">Failed to load completed tasks.</p>';
+            completedList.innerHTML = UI.State.error({ title: 'Error', description: 'Failed to load completed tasks.' });
         }
     }
 
@@ -443,12 +364,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // 4. Leaderboard Snippet (Top 3 + You)
     async function fetchLeaderboardSnippet() {
         const snippetList = document.getElementById('dashboard-leaderboard-list');
-        snippetList.innerHTML = '<p class="text-sm text-on-surface-variant p-4">Loading top performers...</p>';
+        snippetList.innerHTML = UI.State.loading({ message: 'Loading top performers...' });
 
         try {
             const rankings = await apiRequest('/api/student/leaderboard');
             if (rankings.length === 0) {
-                snippetList.innerHTML = '<p class="text-sm text-on-surface-variant p-4">No student records.</p>';
+                snippetList.innerHTML = UI.State.empty({ icon: 'trophy', title: 'No Rankings', description: 'No student records.' });
                 return;
             }
 
@@ -508,12 +429,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // 5. Full Leaderboard stand
     async function fetchFullLeaderboard() {
         const rowsContainer = document.getElementById('full-leaderboard-rows');
-        rowsContainer.innerHTML = '<tr><td colspan="3" class="px-6 py-6 text-center text-sm text-on-surface-variant">Loading rankings database...</td></tr>';
+        rowsContainer.innerHTML = UI.Table.loadingRow({ colspan: 3, message: 'Loading rankings database...' });
 
         try {
             const rankings = await apiRequest('/api/student/leaderboard');
             if (rankings.length === 0) {
-                rowsContainer.innerHTML = '<tr><td colspan="3" class="px-6 py-6 text-center text-sm text-on-surface-variant">No student records.</td></tr>';
+                rowsContainer.innerHTML = UI.Table.emptyRow({ colspan: 3, message: 'No student records.' });
                 return;
             }
 
@@ -536,7 +457,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }).join('');
 
         } catch (error) {
-            rowsContainer.innerHTML = '<tr><td colspan="3" class="px-6 py-6 text-center text-sm text-error">Failed to fetch leaderboard.</td></tr>';
+            rowsContainer.innerHTML = UI.Table.errorRow({ colspan: 3, message: 'Failed to fetch leaderboard.' });
         }
     }
 
@@ -627,5 +548,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Initialize: Start on Dashboard view
-    switchView('dashboard');
+    ViewManager.init('dashboard');
 });

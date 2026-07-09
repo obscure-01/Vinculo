@@ -1,3 +1,17 @@
+
+                        <!-- New Architecture Routes -->
+                        <button id="mobile-nav-verification-queue" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
+                            <span class="material-symbols-outlined text-[20px]">queue</span>
+                            Verification Queue
+                        </button>
+                        <button id="mobile-nav-history" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
+                            <span class="material-symbols-outlined text-[20px]">history</span>
+                            History
+                        </button>
+                        <button id="mobile-nav-review-logs" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
+                            <span class="material-symbols-outlined text-[20px]">fact_check</span>
+                            Review Logs
+                        </button>
 <!DOCTYPE html>
 <html class="h-full bg-surface" lang="en">
 <head>
@@ -172,7 +186,22 @@
                 Logout
             </button>
         </div>
-    </nav>
+    
+                <!-- New Architecture Routes -->
+                <button id="nav-verification-queue" class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
+                    <span class="material-symbols-outlined text-[20px]">queue</span>
+                    Verification Queue
+                </button>
+                <button id="nav-history" class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
+                    <span class="material-symbols-outlined text-[20px]">history</span>
+                    History
+                </button>
+                <button id="nav-review-logs" class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
+                    <span class="material-symbols-outlined text-[20px]">fact_check</span>
+                    Review Logs
+                </button>
+
+            </nav>
 
     <!-- Main Content Wrapper -->
     <div class="flex-1 flex flex-col min-w-0 overflow-hidden md:ml-64">
@@ -1216,7 +1245,47 @@
                 </div>
 
             </div>
-        </main>
+        
+        <!-- Verification Queue Section -->
+        <section id="view-verification-queue-section" class="hidden">
+            <div class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-3xl font-headline font-bold text-on-surface mb-2">Verification Queue</h2>
+                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Manage and verify pending student tasks.</p>
+                </div>
+            </div>
+            <div id="verification-queue-container" class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
+                <!-- Dynamic content -->
+            </div>
+        </section>
+
+        <!-- History Section -->
+        <section id="view-history-section" class="hidden">
+            <div class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-3xl font-headline font-bold text-on-surface mb-2">History</h2>
+                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Historical records of actions and tasks.</p>
+                </div>
+            </div>
+            <div id="history-container" class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
+                <!-- Dynamic content -->
+            </div>
+        </section>
+
+        <!-- Review Logs Section -->
+        <section id="view-review-logs-section" class="hidden">
+            <div class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-3xl font-headline font-bold text-on-surface mb-2">Review Logs</h2>
+                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Logs of administrative reviews and audits.</p>
+                </div>
+            </div>
+            <div id="review-logs-container" class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
+                <!-- Dynamic content -->
+            </div>
+        </section>
+
+    </main>
     </div>
 
     <!-- Student Progress Detail Modal (Carbon Theme) -->
@@ -1255,6 +1324,9 @@
 
     <!-- Scripting files -->
     <script src="js/auth.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/ui-components.js"></script>
+    <script src="js/view-manager.js"></script>
     <script src="js/admin.js"></script>
 </body>
 </html>

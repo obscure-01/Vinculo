@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const { authenticateToken, requireRole } = require('../middleware');
 const manualAuditService = require('../services/manualAuditService');
-
+const auditAnalyticsService = require('../services/auditAnalyticsService');
 // Protect all routes with JWT and check for 'Admin' role
 router.use(authenticateToken, requireRole('Admin'));
 
@@ -11,19 +11,34 @@ router.use(authenticateToken, requireRole('Admin'));
 router.get('/overview', async (req, res) => {
   try {
     const statsQuery = `
+      WITH TaskCompletion AS (
+        SELECT u.id AS user_id, t.id AS task_id
+        FROM users u
+        CROSS JOIN tasks t
+        WHERE u.role = 'Student' 
+          AND t.expiry_date >= CURRENT_TIMESTAMP
+          AND NOT EXISTS (
+            SELECT 1 FROM task_engagements te
+            WHERE te.task_id = t.id AND te.is_required = TRUE
+            AND NOT EXISTS (
+              SELECT 1 FROM student_activities sa 
+              WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id 
+              AND sa.status IN ('Completed', 'Verified', 'Approved')
+            )
+          )
+      )
       SELECT 
         (SELECT COUNT(*)::int FROM users WHERE role = 'Student') as total_students,
         (SELECT COUNT(*)::int FROM tasks WHERE expiry_date >= CURRENT_TIMESTAMP) as total_tasks,
-        (SELECT COUNT(*)::int FROM task_activity ta JOIN tasks t ON ta.task_id = t.id WHERE ta.status = 'COMPLETED' AND t.expiry_date >= CURRENT_TIMESTAMP) as completed_tasks,
+        (SELECT COUNT(*)::int FROM TaskCompletion) as completed_tasks,
         (
-          SELECT COUNT(*)::int FROM users u 
+          SELECT COUNT(DISTINCT u.id)::int FROM users u 
           WHERE u.role = 'Student' 
           AND EXISTS (
             SELECT 1 FROM tasks t
             WHERE t.expiry_date >= CURRENT_TIMESTAMP
               AND NOT EXISTS (
-                SELECT 1 FROM task_activity ta 
-                WHERE ta.user_id = u.id AND ta.task_id = t.id AND ta.status = 'COMPLETED'
+                SELECT 1 FROM TaskCompletion tc WHERE tc.user_id = u.id AND tc.task_id = t.id
               )
           )
         ) as pending_students
@@ -105,7 +120,19 @@ router.get('/tasks', async (req, res) => {
       SELECT 
         t.*,
         (SELECT COUNT(*)::int FROM users WHERE role = 'Student') as assigned_count,
-        (SELECT COUNT(*)::int FROM task_activity ta WHERE ta.task_id = t.id AND ta.status = 'COMPLETED') as completed_count
+        (
+          SELECT COUNT(*)::int 
+          FROM users u 
+          WHERE u.role = 'Student' 
+            AND NOT EXISTS (
+              SELECT 1 FROM task_engagements te
+              WHERE te.task_id = t.id AND te.is_required = TRUE
+                AND NOT EXISTS (
+                  SELECT 1 FROM student_activities sa
+                  WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+                )
+            )
+        ) as completed_count
       FROM tasks t
       ORDER BY t.created_at DESC
     `);
@@ -138,10 +165,26 @@ router.get('/analytics', async (req, res) => {
   try {
     // 1. Cards overview stats (active tasks only)
     const statsQuery = `
+      WITH TaskCompletion AS (
+        SELECT u.id AS user_id, t.id AS task_id
+        FROM users u
+        CROSS JOIN tasks t
+        WHERE u.role = 'Student' 
+          AND t.expiry_date >= CURRENT_TIMESTAMP
+          AND NOT EXISTS (
+            SELECT 1 FROM task_engagements te
+            WHERE te.task_id = t.id AND te.is_required = TRUE
+            AND NOT EXISTS (
+              SELECT 1 FROM student_activities sa 
+              WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id 
+              AND sa.status IN ('Completed', 'Verified', 'Approved')
+            )
+          )
+      )
       SELECT 
         (SELECT COUNT(*)::int FROM users WHERE role = 'Student') as total_students,
         (SELECT COUNT(*)::int FROM tasks WHERE expiry_date >= CURRENT_TIMESTAMP) as total_tasks,
-        (SELECT COUNT(*)::int FROM task_activity ta JOIN tasks t ON ta.task_id = t.id WHERE ta.status = 'COMPLETED' AND t.expiry_date >= CURRENT_TIMESTAMP) as completed_tasks
+        (SELECT COUNT(*)::int FROM TaskCompletion) as completed_tasks
     `;
     const statsResult = await db.query(statsQuery);
     const stats = statsResult.rows[0];
@@ -163,12 +206,31 @@ router.get('/analytics', async (req, res) => {
         u.name, 
         u.email, 
         u.points,
-        (SELECT COUNT(*)::int FROM task_activity ta WHERE ta.user_id = u.id AND ta.status = 'COMPLETED') as completed_count,
-        COALESCE((
-          SELECT COUNT(*)::int FROM tasks t
-          LEFT JOIN task_activity ta ON ta.task_id = t.id AND ta.user_id = u.id AND ta.status = 'COMPLETED'
-          WHERE t.expiry_date >= CURRENT_TIMESTAMP AND ta.id IS NULL
-        ), 0) as pending_count
+        (
+          SELECT COUNT(*)::int 
+          FROM tasks t
+          WHERE NOT EXISTS (
+            SELECT 1 FROM task_engagements te
+            WHERE te.task_id = t.id AND te.is_required = TRUE
+              AND NOT EXISTS (
+                SELECT 1 FROM student_activities sa
+                WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+              )
+          )
+        ) as completed_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM tasks t
+          WHERE t.expiry_date >= CURRENT_TIMESTAMP
+            AND EXISTS (
+              SELECT 1 FROM task_engagements te
+              WHERE te.task_id = t.id AND te.is_required = TRUE
+                AND NOT EXISTS (
+                  SELECT 1 FROM student_activities sa
+                  WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+                )
+            )
+        ) as pending_count
       FROM users u
       WHERE u.role = 'Student'
       ORDER BY u.points DESC
@@ -184,9 +246,41 @@ router.get('/analytics', async (req, res) => {
         t.social_link, 
         t.created_at,
         t.expiry_date,
-        (SELECT COUNT(*)::int FROM task_activity ta WHERE ta.task_id = t.id AND ta.status = 'COMPLETED') as completed_count,
-        (SELECT COUNT(*)::int FROM task_activity ta WHERE ta.task_id = t.id AND ta.status = 'OPENED') as opened_count,
-        ((SELECT COUNT(*) FROM users WHERE role = 'Student') - (SELECT COUNT(*)::int FROM task_activity ta WHERE ta.task_id = t.id AND ta.status = 'COMPLETED')) as pending_count
+        (
+          SELECT COUNT(*)::int 
+          FROM users u 
+          WHERE u.role = 'Student' 
+            AND NOT EXISTS (
+              SELECT 1 FROM task_engagements te
+              WHERE te.task_id = t.id AND te.is_required = TRUE
+                AND NOT EXISTS (
+                  SELECT 1 FROM student_activities sa
+                  WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+                )
+            )
+        ) as completed_count,
+        (
+          SELECT COUNT(DISTINCT sa.user_id)::int 
+          FROM student_activities sa
+          JOIN task_engagements te ON sa.task_engagement_id = te.id
+          WHERE te.task_id = t.id
+        ) as opened_count,
+        (
+          (SELECT COUNT(*) FROM users WHERE role = 'Student') - 
+          (
+            SELECT COUNT(*)::int 
+            FROM users u 
+            WHERE u.role = 'Student' 
+              AND NOT EXISTS (
+                SELECT 1 FROM task_engagements te
+                WHERE te.task_id = t.id AND te.is_required = TRUE
+                  AND NOT EXISTS (
+                    SELECT 1 FROM student_activities sa
+                    WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+                  )
+              )
+          )
+        ) as pending_count
       FROM tasks t
       ORDER BY t.created_at DESC
     `;
@@ -194,36 +288,38 @@ router.get('/analytics', async (req, res) => {
 
     // 4. Total Verified Comments
     const totalVerifiedResult = await db.query(
-      "SELECT COUNT(*)::int FROM task_activity WHERE comment_status IN ('Comment Detected', 'Comment Verified', 'Verification Successful')"
+      "SELECT COUNT(*)::int FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.engagement_type = 'COMMENT' AND sa.status IN ('Verified', 'Approved')"
     );
     const totalVerifiedComments = totalVerifiedResult.rows[0].count;
 
     // 4b. YouTube Verified Comments
     const ytVerifiedResult = await db.query(`
-      SELECT COUNT(*)::int FROM task_activity ta 
-      JOIN tasks t ON ta.task_id = t.id 
-      WHERE t.platform = 'YouTube' AND ta.comment_status IN ('Comment Verified', 'Comment Detected', 'Verification Successful')
+      SELECT COUNT(*)::int FROM student_activities sa 
+      JOIN task_engagements te ON sa.task_engagement_id = te.id
+      JOIN tasks t ON te.task_id = t.id 
+      WHERE t.platform = 'YouTube' AND te.engagement_type = 'COMMENT' AND sa.status IN ('Verified', 'Approved')
     `);
     const verifiedYouTubeComments = ytVerifiedResult.rows[0].count;
 
     // 4c. Total Comment Points Awarded
     const totalPointsResult = await db.query(
-      "SELECT COALESCE(SUM(comment_points_awarded), 0)::int FROM task_activity"
+      "SELECT COALESCE(SUM(te.points), 0)::int FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.engagement_type = 'COMMENT' AND sa.status IN ('Verified', 'Approved')"
     );
     const totalCommentPointsAwarded = totalPointsResult.rows[0].coalesce;
 
     // 4d. Students with Verified Comments
     const studentsWithCommentsResult = await db.query(
-      "SELECT COUNT(DISTINCT user_id)::int FROM task_activity WHERE comment_status IN ('Comment Verified', 'Comment Detected', 'Verification Successful')"
+      "SELECT COUNT(DISTINCT sa.user_id)::int FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.engagement_type = 'COMMENT' AND sa.status IN ('Verified', 'Approved')"
     );
     const studentsWithVerifiedComments = studentsWithCommentsResult.rows[0].count;
 
     // 5. Comments Per Platform
     const platformBreakdownResult = await db.query(`
-      SELECT t.platform, COUNT(ta.id)::int as count
+      SELECT t.platform, COUNT(sa.id)::int as count
       FROM tasks t
-      JOIN task_activity ta ON ta.task_id = t.id
-      WHERE ta.comment_status IN ('Comment Detected', 'Comment Verified', 'Verification Successful')
+      JOIN task_engagements te ON te.task_id = t.id
+      JOIN student_activities sa ON sa.task_engagement_id = te.id
+      WHERE te.engagement_type = 'COMMENT' AND sa.status IN ('Verified', 'Approved')
       GROUP BY t.platform
     `);
     
@@ -241,9 +337,10 @@ router.get('/analytics', async (req, res) => {
 
     // 6. Top Commenters
     const topCommentersResult = await db.query(`
-      SELECT u.id, u.name, u.email, COALESCE(SUM(CASE WHEN ta.comment_status IN ('Comment Detected', 'Comment Verified', 'Verification Successful') THEN 1 ELSE 0 END), 0)::int as verified_comments_count
+      SELECT u.id, u.name, u.email, COALESCE(SUM(CASE WHEN sa.status IN ('Verified', 'Approved') THEN 1 ELSE 0 END), 0)::int as verified_comments_count
       FROM users u
-      LEFT JOIN task_activity ta ON ta.user_id = u.id
+      LEFT JOIN student_activities sa ON sa.user_id = u.id
+      LEFT JOIN task_engagements te ON sa.task_engagement_id = te.id AND te.engagement_type = 'COMMENT'
       WHERE u.role = 'Student'
       GROUP BY u.id, u.name, u.email
       ORDER BY verified_comments_count DESC, u.name ASC
@@ -302,12 +399,31 @@ router.get('/students', async (req, res) => {
         u.email, 
         u.points,
         u.created_at,
-        (SELECT COUNT(*)::int FROM task_activity ta WHERE ta.user_id = u.id AND ta.status = 'COMPLETED') as completed_count,
-        COALESCE((
-          SELECT COUNT(*)::int FROM tasks t
-          LEFT JOIN task_activity ta ON ta.task_id = t.id AND ta.user_id = u.id AND ta.status = 'COMPLETED'
-          WHERE t.expiry_date >= CURRENT_TIMESTAMP AND ta.id IS NULL
-        ), 0) as pending_count
+        (
+          SELECT COUNT(*)::int 
+          FROM tasks t
+          WHERE NOT EXISTS (
+            SELECT 1 FROM task_engagements te
+            WHERE te.task_id = t.id AND te.is_required = TRUE
+              AND NOT EXISTS (
+                SELECT 1 FROM student_activities sa
+                WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+              )
+          )
+        ) as completed_count,
+        (
+          SELECT COUNT(*)::int 
+          FROM tasks t
+          WHERE t.expiry_date >= CURRENT_TIMESTAMP
+            AND EXISTS (
+              SELECT 1 FROM task_engagements te
+              WHERE te.task_id = t.id AND te.is_required = TRUE
+                AND NOT EXISTS (
+                  SELECT 1 FROM student_activities sa
+                  WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+                )
+            )
+        ) as pending_count
       FROM users u
       WHERE u.role = 'Student'
       ORDER BY u.name ASC
@@ -356,19 +472,42 @@ router.get('/tracking', async (req, res) => {
         t.title as task_title,
         t.platform as platform,
         CASE 
-          WHEN ta.status = 'COMPLETED' THEN 'COMPLETED'
+          WHEN NOT EXISTS (
+            SELECT 1 FROM task_engagements te
+            WHERE te.task_id = t.id AND te.is_required = TRUE
+            AND NOT EXISTS (
+              SELECT 1 FROM student_activities sa
+              WHERE sa.task_engagement_id = te.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+            )
+          ) AND EXISTS (
+            SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = u.id
+          ) THEN 'COMPLETED'
           WHEN t.expiry_date < CURRENT_TIMESTAMP THEN 'EXPIRED'
-          ELSE COALESCE(ta.status, 'PENDING')
+          WHEN EXISTS (
+            SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = u.id
+          ) THEN 'OPENED'
+          ELSE 'PENDING'
         END as status,
-        ta.opened_at,
-        ta.completed_at,
-        COALESCE(ta.comment_status, 'Not Attempted') as comment_status,
-        ta.comment_verified_at,
-        COALESCE(ta.comment_points_awarded, 0) as comment_points_awarded,
-        (CASE WHEN ta.status = 'COMPLETED' THEN 10 ELSE 0 END + COALESCE(ta.comment_points_awarded, 0)) as points_earned
+        (
+          SELECT MIN(sa.created_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = u.id
+        ) as opened_at,
+        (
+          SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+        ) as completed_at,
+        COALESCE((
+          SELECT sa.status FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = u.id LIMIT 1
+        ), 'Not Attempted') as comment_status,
+        (
+          SELECT sa.completed_at FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = u.id LIMIT 1
+        ) as comment_verified_at,
+        COALESCE((
+          SELECT te.points FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = u.id AND sa.status IN ('Verified', 'Approved') LIMIT 1
+        ), 0) as comment_points_awarded,
+        (
+          SELECT COALESCE(SUM(te.points), 0) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = u.id AND sa.status IN ('Completed', 'Verified', 'Approved')
+        ) as points_earned
       FROM users u
       CROSS JOIN tasks t
-      LEFT JOIN task_activity ta ON ta.user_id = u.id AND ta.task_id = t.id
       WHERE u.role = 'Student'
       ORDER BY u.name ASC, t.created_at DESC
     `;
@@ -400,14 +539,29 @@ router.get('/students/:id/tasks', async (req, res) => {
         t.title as task_title,
         t.platform as platform,
         CASE 
-          WHEN ta.status = 'COMPLETED' THEN 'COMPLETED'
+          WHEN NOT EXISTS (
+            SELECT 1 FROM task_engagements te
+            WHERE te.task_id = t.id AND te.is_required = TRUE
+            AND NOT EXISTS (
+              SELECT 1 FROM student_activities sa
+              WHERE sa.task_engagement_id = te.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+            )
+          ) AND EXISTS (
+            SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
+          ) THEN 'COMPLETED'
           WHEN t.expiry_date < CURRENT_TIMESTAMP THEN 'EXPIRED'
-          ELSE COALESCE(ta.status, 'PENDING')
+          WHEN EXISTS (
+            SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
+          ) THEN 'OPENED'
+          ELSE 'PENDING'
         END as status,
-        ta.opened_at,
-        ta.completed_at
+        (
+          SELECT MIN(sa.created_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
+        ) as opened_at,
+        (
+          SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+        ) as completed_at
       FROM tasks t
-      LEFT JOIN task_activity ta ON ta.task_id = t.id AND ta.user_id = $1
       ORDER BY t.created_at DESC
     `;
     const result = await db.query(progressQuery, [studentId]);
@@ -544,15 +698,75 @@ router.post('/manual-audits/batch-review', async (req, res) => {
   }
 
   try {
-    const result = await manualAuditService.batchReviewAudits(auditIds, action, reason, notes, req.user.id);
+    const result = await manualAuditService.batchReviewAudits(auditIds, action, reason, notes, req.user.id, req.user.name);
     res.json(result);
   } catch (error) {
-    console.error('Transaction error in batch review:', error.message);
-    res.status(400).json({ error: error.message });
+    console.error('Unexpected error in batch review:', error.message);
+    res.status(500).json({ error: 'An unexpected error occurred during batch review.', details: error.message });
   }
 });
 
-// 17. Get specific student's audit history
+// 17. Audit Analytics - Queue
+router.get('/manual-audits/analytics/queue', async (req, res) => {
+  try {
+    const result = await auditAnalyticsService.getQueueAnalytics();
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching queue analytics:', error);
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Failed to fetch queue analytics.' });
+  }
+});
+
+// 18. Audit Analytics - Performance
+router.get('/manual-audits/analytics/performance', async (req, res) => {
+  try {
+    const result = await auditAnalyticsService.getPerformanceAnalytics(req.query);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching performance analytics:', error);
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Failed to fetch performance analytics.' });
+  }
+});
+
+// 19. Review History
+router.get('/manual-audits/history', async (req, res) => {
+  try {
+    const result = await auditAnalyticsService.getReviewHistory(req.query);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching review history:', error);
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Failed to fetch review history.' });
+  }
+});
+
+// 20. Review Log Explorer
+router.get('/manual-audits/logs', async (req, res) => {
+  try {
+    const result = await auditAnalyticsService.getReviewLogs(req.query);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching review logs:', error);
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Failed to fetch review logs.' });
+  }
+});
+
+// 21. Student Verification Timeline
+router.get('/manual-audits/:auditId/timeline', async (req, res) => {
+  try {
+    const result = await auditAnalyticsService.getAuditTimeline(req.params.auditId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching audit timeline:', error);
+    const status = error.status || 500;
+    res.status(status).json({ error: error.message || 'Failed to fetch timeline.' });
+  }
+});
+
+// 22. Get specific student's audit history
 router.get('/manual-audits/student/:id', async (req, res) => {
   try {
     const result = await manualAuditService.getStudentAudits(req.params.id);
