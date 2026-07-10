@@ -86,6 +86,10 @@ window.ViewManager = (function() {
         if (v.onEnter) v.onEnter();
 
         closeMobileSidebar();
+
+        try {
+            sessionStorage.setItem('vinculo_last_view', activeKey);
+        } catch(e) {}
     }
 
     function closeMobileSidebar() {
@@ -110,7 +114,17 @@ window.ViewManager = (function() {
             }
         });
 
-        if (defaultKey) {
+        let targetKey = defaultKey;
+        try {
+            const saved = sessionStorage.getItem('vinculo_last_view');
+            if (saved && views[saved]) {
+                targetKey = saved;
+            }
+        } catch(e) {}
+
+        if (targetKey && views[targetKey]) {
+            switchView(targetKey);
+        } else if (defaultKey) {
             switchView(defaultKey);
         }
     }

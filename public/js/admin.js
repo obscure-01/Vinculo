@@ -1145,7 +1145,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Backend takes status. We will do search and sort on the client side since the backend doesn't support them natively in the endpoint, 
             // OR if the endpoint supports search/sort, we'd pass it. The prompt says "Do NOT modify backend APIs".
             // The existing backend is /manual-audits?status=...&page=...&limit=...
-            const data = await apiRequest(/api/admin/manual-audits?status= + statusFilter + &page= + page + &limit=500);
+            const data = await apiRequest(`/api/admin/manual-audits?status=${statusFilter}&page=${page}&limit=500`);
             let audits = data.audits || data.data || [];
 
             if (searchInput) {
@@ -1345,7 +1345,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const groups = {};
             currentBatchData.forEach(item => {
-                const key = ${item.decision}||;
+                const key = `${item.decision}|${item.rejectionReason || ''}|${item.notes || ''}`;
                 if (!groups[key]) {
                     groups[key] = {
                         action: item.decision === 'APPROVED' ? 'approve' : 'reject',
@@ -1368,7 +1368,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         reason: group.reason,
                         notes: group.notes
                     })
-                }).then(res => ({ group, res }));
+                }).then(res => ({ group, res }))
+                .catch(error => {
+                    error.group = group;
+                    throw error;
+                });
             });
 
             const results = await Promise.allSettled(requests);
@@ -1391,10 +1395,10 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             if (failureCount === 0) {
-                showToast(Successfully processed  audits., false);
+                showToast(`Successfully processed ${successCount} audits.`, false);
                 closeBatchWorkspace();
             } else {
-                showToast(Batch submitted partially.  succeeded,  failed. Please retry remaining., true);
+                showToast(`Batch submitted partially. ${successCount} succeeded, ${failedItems.length} failed. Please retry remaining.`, true);
                 currentBatchData = failedItems;
                 renderBatchWorkspace();
                 submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">done_all</span> Submit Batch Decisions';
