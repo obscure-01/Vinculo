@@ -124,6 +124,10 @@ router.get('/tasks', async (req, res) => {
           ) THEN 'OPENED'
           ELSE 'PENDING'
         END as status,
+        (SELECT sa.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 LIMIT 1) as activity_status,
+        (SELECT ma.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as manual_audit_status,
+        (SELECT rl.rejection_reason FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id JOIN review_logs rl ON rl.manual_audit_id = ma.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY rl.created_at DESC LIMIT 1) as rejection_reason,
+        (SELECT ma.reviewed_at FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as reviewed_at,
         (
           SELECT MIN(sa.created_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
         ) as opened_at
@@ -188,6 +192,47 @@ router.get('/tasks/completed', async (req, res) => {
   } catch (error) {
     console.error('Error fetching student completed tasks:', error);
     res.status(500).json({ error: 'Failed to retrieve completed tasks.' });
+  }
+});
+
+// 2c. Task Progress List (Submitted, Rejected, Completed)
+router.get('/tasks/progress', async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+     const progressQuery = `
+      SELECT 
+        t.id, 
+        t.title, 
+        t.platform, 
+        t.social_link, 
+        t.verification_method,
+        t.engagement_type,
+        (
+          SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+        ) as completed_at,
+        NULL as time_spent,
+        (SELECT sa.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 LIMIT 1) as activity_status,
+        (SELECT ma.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as manual_audit_status,
+        (SELECT rl.rejection_reason FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id JOIN review_logs rl ON rl.manual_audit_id = ma.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY rl.created_at DESC LIMIT 1) as rejection_reason,
+        (SELECT ma.reviewed_at FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as reviewed_at,
+        COALESCE((
+          SELECT sa.status FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = $1 LIMIT 1
+        ), 'Not Attempted') as comment_status,
+        COALESCE((
+          SELECT te.points FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = $1 AND sa.status IN ('Verified', 'Approved') LIMIT 1
+        ), 0) as comment_points_awarded
+      FROM tasks t
+      WHERE EXISTS (
+        SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status != 'Pending'
+      )
+      ORDER BY t.created_at DESC
+    `;
+    const result = await db.query(progressQuery, [userId]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching student task progress:', error);
+    res.status(500).json({ error: 'Failed to retrieve task progress.' });
   }
 });
 

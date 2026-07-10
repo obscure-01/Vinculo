@@ -112,9 +112,9 @@
                 <span class="material-symbols-outlined">task</span>
                 Pending Tasks
             </button>
-            <button id="nav-completed" class="nav-item w-full flex items-center gap-3 px-6 py-4 text-secondary-fixed-dim font-normal font-headline text-body-sm hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
-                <span class="material-symbols-outlined">check_circle</span>
-                Completed Tasks
+            <button id="nav-task-progress" class="nav-item w-full flex items-center gap-3 px-6 py-4 text-secondary-fixed-dim font-normal font-headline text-body-sm hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
+                <span class="material-symbols-outlined">assignment_turned_in</span>
+                Task Progress
             </button>
             <button id="nav-leaderboard" class="nav-item w-full flex items-center gap-3 px-6 py-4 text-secondary-fixed-dim font-normal font-headline text-body-sm hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
                 <span class="material-symbols-outlined">leaderboard</span>
@@ -179,9 +179,9 @@
                         </button>
                     </li>
                     <li>
-                        <button id="mobile-nav-completed" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
-                            <span class="material-symbols-outlined">check_circle</span>
-                            Completed Tasks
+                        <button id="mobile-nav-task-progress" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
+                            <span class="material-symbols-outlined">assignment_turned_in</span>
+                            Task Progress
                         </button>
                     </li>
                     <li>
@@ -306,13 +306,13 @@
                     </div>
                 </div>
 
-                <!-- VIEW 3: COMPLETED TASKS -->
-                <div id="view-completed-section" class="space-y-6 hidden">
+                <!-- VIEW 3: TASK PROGRESS -->
+                <div id="view-task-progress-section" class="space-y-6 hidden">
                     <div class="border-b border-outline-variant pb-2">
-                        <h3 class="text-2xl font-semibold text-on-surface font-headline">Completed Tasks</h3>
-                        <p class="text-sm text-on-surface-variant mt-1">Your past participation achievements.</p>
+                        <h3 class="text-2xl font-semibold text-on-surface font-headline">Task Progress</h3>
+                        <p class="text-sm text-on-surface-variant mt-1">Track the status of your submitted tasks.</p>
                     </div>
-                    <div id="completed-tasks-list" class="grid gap-4">
+                    <div id="task-progress-list" class="grid gap-4">
                         <!-- Dynamically filled -->
                     </div>
                 </div>

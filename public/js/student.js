@@ -35,14 +35,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ViewManager.registerView('task-progress', {
         nav: document.getElementById('nav-task-progress'),
         mobNav: document.getElementById('mobile-nav-task-progress'),
-        section: document.getElementById('view-task-progress-section')
-    });
-
-    ViewManager.registerView('completed', {
-        nav: document.getElementById('nav-completed'),
-        mobNav: document.getElementById('mobile-nav-completed'),
-        section: document.getElementById('view-completed-section'),
-        onEnter: fetchCompletedTasks
+        section: document.getElementById('view-task-progress-section'),
+        onEnter: fetchTaskProgress
     });
 
     ViewManager.registerView('leaderboard', {
@@ -145,11 +139,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 let actionHandler = `openTask(${task.id})`;
                 let buttonClass = 'bg-primary text-on-primary hover:bg-on-primary-fixed-variant';
 
+                let statusBadge = '';
+                let rejectionInfo = '';
+
+                if (task.manual_audit_status === 'PENDING' || task.manual_audit_status === 'UNDER_REVIEW') {
+                    statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">PENDING REVIEW</span>`;
+                } else if (task.manual_audit_status === 'REJECTED') {
+                    statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-error">REJECTED</span>`;
+                    if (task.rejection_reason) {
+                        rejectionInfo = `<div class="mt-2 text-xs text-error font-medium flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">error</span> Reason: ${escapeHTML(task.rejection_reason)}</div>`;
+                    }
+                } else if (isOpened) {
+                    statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-container text-on-primary-container border border-primary-fixed-dim">OPENED</span>`;
+                }
+
                 if (isOpened) {
                     if (isManual) {
-                        buttonText = 'Submit for Review';
-                        buttonClass = 'bg-secondary text-on-secondary hover:bg-secondary-fixed-dim';
-                        actionHandler = `openManualAuditModal(${task.id}, '${escapeHTML(task.title).replace(/'/g, "\\'")}', '${task.platform}', '${task.engagement_type}')`;
+                        if (task.manual_audit_status === 'PENDING') {
+                            buttonText = 'Withdraw';
+                            buttonClass = 'bg-surface text-error border border-error hover:bg-error-container';
+                            actionHandler = `withdrawDeclaration(${task.id})`;
+                        } else if (task.manual_audit_status === 'UNDER_REVIEW') {
+                            buttonText = 'Under Review';
+                            buttonClass = 'bg-surface-container-high text-on-surface-variant opacity-70 cursor-not-allowed';
+                            actionHandler = `return false`;
+                        } else {
+                            buttonText = task.manual_audit_status === 'REJECTED' ? 'Resubmit for Review' : 'Submit for Review';
+                            buttonClass = 'bg-secondary text-on-secondary hover:bg-secondary-fixed-dim';
+                            actionHandler = `openManualAuditModal(${task.id}, '${escapeHTML(task.title).replace(/'/g, "\\'")}', '${task.platform}', '${task.engagement_type}')`;
+                        }
                     } else {
                         buttonText = 'Mark Complete';
                         buttonClass = 'bg-tertiary text-on-tertiary hover:bg-on-tertiary-fixed-variant';
@@ -158,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 return `
-                    <div class="bg-surface border border-outline-variant p-4 flex items-center justify-between hover:bg-surface-container-low transition-colors rounded-DEFAULT">
+                    <div class="bg-surface border border-outline-variant p-4 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-surface-container-low transition-colors rounded-DEFAULT">
                         <div class="flex items-center gap-4">
                             <div class="w-12 h-12 bg-primary-container text-on-primary-container flex items-center justify-center rounded-DEFAULT shrink-0">
                                 <span class="material-symbols-outlined">${platformIcon}</span>
@@ -167,12 +185,13 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <h4 class="font-semibold text-on-surface text-sm sm:text-base">${escapeHTML(task.title)}</h4>
                                 <div class="flex items-center gap-2 mt-0.5">
                                     <span class="text-xs text-on-surface-variant font-medium">${task.platform}</span>
-                                    ${isOpened ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">OPENED</span>` : ''}
+                                    ${statusBadge}
                                 </div>
+                                ${rejectionInfo}
                             </div>
                         </div>
-                        <div class="flex items-center gap-4 sm:gap-6 shrink-0">
-                            <div class="text-right">
+                        <div class="flex items-center justify-start sm:justify-end gap-4 sm:gap-6 mt-4 sm:mt-0 shrink-0">
+                            <div class="text-left sm:text-right">
                                 <p class="text-sm font-bold text-tertiary">+10 pts</p>
                             </div>
                             <button onclick="${actionHandler}" class="${buttonClass} px-3 sm:px-4 py-2 font-semibold text-xs sm:text-sm transition-colors rounded-DEFAULT shrink-0">
@@ -243,6 +262,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Withdraw Declaration Action
+    window.withdrawDeclaration = async function(taskId) {
+        if (!confirm('Are you sure you want to withdraw this task from review?')) return;
+        alertBanner.classList.add('hidden'); // Clear alert banner
+        try {
+            const data = await apiRequest(`/api/student/tasks/${taskId}/withdraw`, { method: 'POST' });
+            showAlert(data.message, false);
+            fetchPendingTasks();
+        } catch (error) {
+            showAlert(error.message, true);
+        }
+    };
+
     // Complete Task Action
     window.completeTask = async function(taskId) {
         alertBanner.classList.add('hidden'); // Clear alert banner
@@ -258,92 +290,94 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // 3. Completed Tasks list
-    async function fetchCompletedTasks() {
-        const completedList = document.getElementById('completed-tasks-list');
-        completedList.innerHTML = UI.State.empty({ icon: 'hourglass_empty', title: 'Loading...', description: 'Fetching completed tasks.' });
+    // 3. Task Progress list
+    async function fetchTaskProgress() {
+        const progressList = document.getElementById('task-progress-list');
+        const emptyState = document.getElementById('task-progress-empty');
+        const skeleton = document.getElementById('task-progress-skeleton');
+        
+        if (progressList) progressList.innerHTML = '';
+        if (emptyState) emptyState.classList.add('hidden');
+        if (skeleton) skeleton.classList.remove('hidden');
 
         try {
-            const tasks = await apiRequest('/api/student/tasks/completed');
+            const tasks = await apiRequest('/api/student/tasks/progress');
+            if (skeleton) skeleton.classList.add('hidden');
+
             if (tasks.length === 0) {
-                completedList.innerHTML = `
-                    <div class="bg-surface border border-outline-variant p-8 text-center rounded-DEFAULT">
-                        <span class="material-symbols-outlined text-4xl text-on-surface-variant mb-2">assignment_late</span>
-                        <p class="font-semibold text-on-surface text-base">No Completed Tasks Yet</p>
-                        <p class="text-xs text-on-surface-variant mt-1">Start engaging with assigned tasks in your dashboard to earn points.</p>
-                    </div>
-                `;
+                if (emptyState) {
+                    emptyState.classList.remove('hidden');
+                } else {
+                    progressList.innerHTML = `
+                        <div class="bg-surface border border-outline-variant p-8 text-center rounded-DEFAULT">
+                            <span class="material-symbols-outlined text-4xl text-on-surface-variant mb-2">assignment_late</span>
+                            <p class="font-semibold text-on-surface text-base">No Progress History Yet</p>
+                            <p class="text-xs text-on-surface-variant mt-1">Start engaging with assigned tasks in your dashboard to build your record.</p>
+                        </div>
+                    `;
+                }
                 return;
             }
 
-            completedList.innerHTML = tasks.map(task => {
+            progressList.innerHTML = tasks.map(task => {
                 const platformIcon = getPlatformIcon(task.platform);
-                const formattedDate = new Date(task.completed_at).toLocaleString();
+                const formattedDate = task.completed_at ? new Date(task.completed_at).toLocaleString() : 'N/A';
                 const totalPoints = 10 + (task.comment_points_awarded || 0);
+                const isManual = task.verification_method === 'MANUAL';
 
-                let commentStatusBadge = '';
-                const commentStatus = task.comment_status || (task.platform === 'YouTube' ? 'Not Checked' : 'Not Attempted');
-                if (commentStatus === 'Comment Detected' || commentStatus === 'Comment Verified' || commentStatus === 'Verification Successful') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-tertiary-container text-on-tertiary-container border border-tertiary-fixed">Comment Verified (+5 pts)</span>`;
-                } else if (commentStatus === 'Comment Not Verified' || commentStatus === 'Comment Not Found') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-[#fbdfe1]">Comment Not Found</span>`;
-                } else if (commentStatus === 'Platform Not Available' || commentStatus === 'YouTube Account Not Available' || commentStatus === 'Facebook Account Not Available') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-secondary-container text-on-secondary-container border border-outline-variant">${commentStatus === 'Platform Not Available' ? 'Platform Not Available' : (task.platform + ' Account Not Available')}</span>`;
-                } else if (commentStatus === 'Invalid URL') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-[#fbdfe1]">Invalid URL</span>`;
-                } else if (commentStatus === 'Video ID Extraction Failed') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-[#fbdfe1]">ID Extraction Failed</span>`;
-                } else if (commentStatus === 'Video Not Found') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-[#fbdfe1]">Video Not Found</span>`;
-                } else if (commentStatus === 'Handle Mismatch') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-[#fbdfe1]">Handle Mismatch</span>`;
-                } else if (commentStatus === 'Verification Error') {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-[#fbdfe1]">Verification Error</span>`;
+                let statusBadge = '';
+                let rejectionInfo = '';
+                let pointsHTML = '';
+
+                if (isManual) {
+                    if (task.manual_audit_status === 'APPROVED') {
+                        statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-tertiary-container text-on-tertiary-container border border-tertiary-fixed">APPROVED</span>`;
+                        pointsHTML = `<p class="text-sm font-bold text-tertiary">${totalPoints} pts earned</p>`;
+                    } else if (task.manual_audit_status === 'REJECTED') {
+                        statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-error">REJECTED</span>`;
+                        pointsHTML = `<p class="text-sm font-bold text-on-surface-variant line-through opacity-50">${totalPoints} pts earned</p>`;
+                        if (task.rejection_reason) {
+                            rejectionInfo = `<div class="mt-2 text-xs text-error font-medium flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">error</span> Reason: ${escapeHTML(task.rejection_reason)}</div>`;
+                        }
+                    } else { // PENDING or UNDER_REVIEW
+                        statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">PENDING REVIEW</span>`;
+                        pointsHTML = `<p class="text-sm font-bold text-on-surface-variant opacity-70">${totalPoints} pts pending</p>`;
+                    }
                 } else {
-                    commentStatusBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-surface-container-high text-on-surface-variant">${task.platform === 'YouTube' ? 'Not Checked' : 'Comment Not Attempted'}</span>`;
+                    // Automatic Tasks
+                    statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-tertiary-container text-on-tertiary-container border border-tertiary-fixed">COMPLETED</span>`;
+                    pointsHTML = `<p class="text-sm font-bold text-tertiary">${totalPoints} pts earned</p>`;
                 }
 
-                // Verify comment button (only if not already successfully verified/detected)
-                const isVerified = commentStatus === 'Comment Detected' || commentStatus === 'Comment Verified' || commentStatus === 'Verification Successful';
-                const showVerifyBtn = !isVerified;
-                const buttonText = task.platform === 'YouTube' ? 'Check For Comment' : 'Verify Comment';
-                const verifyBtnHTML = showVerifyBtn
-                    ? `<button onclick="verifyComment(${task.id})" class="bg-primary text-on-primary hover:bg-on-primary-fixed-variant px-3 py-1.5 font-semibold text-xs transition-colors rounded-DEFAULT shrink-0">
-                           ${buttonText}
-                       </button>`
-                    : '';
-
                 return `
-                    <div class="bg-surface border border-outline-variant p-4 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-surface-container-low transition-colors rounded-DEFAULT gap-4">
-                        <div class="flex items-center gap-4">
+                    <div class="bg-surface border border-outline-variant p-4 flex flex-col sm:flex-row justify-between hover:bg-surface-container-low transition-colors rounded-DEFAULT gap-4">
+                        <div class="flex items-start sm:items-center gap-4">
                             <div class="w-12 h-12 bg-surface-container text-on-surface-variant flex items-center justify-center rounded-DEFAULT shrink-0">
                                 <span class="material-symbols-outlined">${platformIcon}</span>
                             </div>
                             <div>
                                 <h4 class="font-semibold text-on-surface text-sm sm:text-base">${escapeHTML(task.title)}</h4>
                                 <div class="flex flex-wrap items-center gap-2 mt-1">
-                                    <span class="text-xs text-on-surface-variant font-medium">${task.platform} • Completed: ${formattedDate}</span>
-                                    ${commentStatusBadge}
+                                    <span class="text-xs text-on-surface-variant font-medium">${task.platform} • Updated: ${formattedDate}</span>
+                                    ${statusBadge}
                                 </div>
+                                ${rejectionInfo}
                             </div>
                         </div>
-                        <div class="flex items-center justify-between sm:justify-end gap-6 shrink-0">
+                        <div class="flex items-center sm:items-end justify-start sm:justify-end gap-6 shrink-0 mt-2 sm:mt-0">
                             <div class="text-left sm:text-right">
-                                <p class="text-xs text-on-surface-variant">Time Spent: <strong>${task.time_spent}s</strong></p>
-                                <p class="text-sm font-bold text-tertiary">${totalPoints} pts earned</p>
+                                ${pointsHTML}
                             </div>
-                            ${verifyBtnHTML}
                         </div>
                     </div>
                 `;
             }).join('');
 
         } catch (error) {
-            completedList.innerHTML = UI.State.error({ title: 'Error', description: 'Failed to load completed tasks.' });
+            if (skeleton) skeleton.classList.add('hidden');
+            progressList.innerHTML = UI.State.error({ title: 'Error', description: 'Failed to load task progress.' });
         }
     }
-
-    // Action to verify a task comment
     window.verifyComment = async function(taskId) {
         alertBanner.classList.add('hidden'); // Clear alert banner
         try {
@@ -354,7 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showAlert(data.message, isError);
             
             // Refresh lists and stats
-            fetchCompletedTasks();
+            fetchTaskProgress();
             fetchWelcomeDashboard();
         } catch (error) {
             showAlert(error.message || 'Verification failed. Please try again.', true);
