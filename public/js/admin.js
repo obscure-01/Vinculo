@@ -109,7 +109,11 @@ document.addEventListener('DOMContentLoaded', () => {
         nav: document.getElementById('nav-history'),
         mobNav: document.getElementById('mobile-nav-history'),
         section: document.getElementById('view-history-section'),
-        onEnter: () => onAdminViewEnter('History', 'Historical records of actions and tasks.', 'history')
+        onEnter: () => {
+            onAdminViewEnter('History', 'Historical records of actions and tasks.', 'history');
+            if(typeof fetchAuditHistory === 'function') fetchAuditHistory();
+            else if (ViewManager.events && ViewManager.events.onHistoryEnter) ViewManager.events.onHistoryEnter();
+        }
     });
 
     ViewManager.registerView('reviewLogs', {
@@ -1126,13 +1130,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    let currentAuditPage = 1;
+
     async function fetchPendingAuditsList(page = 1) {
+        currentAuditPage = page;
         const listContainer = document.getElementById('all-pending-audits-list');
         listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-on-surface-variant">Loading pending audits...</td></tr>';
         
         try {
-            const data = await apiRequest(`/api/admin/manual-audits?status=PENDING&page=${page}&limit=50`);
-            const audits = data.audits;
+            const statusFilter = document.getElementById('audit-status-filter')?.value || 'PENDING';
+            const searchInput = document.getElementById('audit-search-input')?.value.toLowerCase() || '';
+            const sortOrder = document.getElementById('audit-sort-select')?.value || 'newest';
+            
+            // Backend takes status. We will do search and sort on the client side since the backend doesn't support them natively in the endpoint, 
+            // OR if the endpoint supports search/sort, we'd pass it. The prompt says "Do NOT modify backend APIs".
+            // The existing backend is /manual-audits?status=...&page=...&limit=...
+            const data = await apiRequest(/api/admin/manual-audits?status= + statusFilter + &page= + page + &limit=500);
+            let audits = data.audits || data.data || [];
+
+            if (searchInput) {
+                audits = audits.filter(a => 
+                    (a.student_name && a.student_name.toLowerCase().includes(searchInput)) ||
+                    (a.task_title && a.task_title.toLowerCase().includes(searchInput))
+                );
+            }
+
+            if (sortOrder === 'oldest') {
+                audits.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            } else {
+                audits.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            }
+
+            // Slice for local pagination since we fetched a larger limit to support local filter/sort
+            const limit = 50;
+            const startIndex = (page - 1) * limit;
+            const paginatedAudits = audits.slice(startIndex, startIndex + limit);
+            audits = paginatedAudits;
 
             if (audits.length === 0) {
                 listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-on-surface-variant">No pending manual audits.</td></tr>';
@@ -1167,6 +1200,14 @@ document.addEventListener('DOMContentLoaded', () => {
             listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-error">Failed to load pending audits.</td></tr>';
         }
     }
+
+    document.getElementById('audit-status-filter')?.addEventListener('change', () => fetchPendingAuditsList(1));
+    document.getElementById('audit-sort-select')?.addEventListener('change', () => fetchPendingAuditsList(1));
+    let searchTimeout;
+    document.getElementById('audit-search-input')?.addEventListener('input', () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => fetchPendingAuditsList(1), 300);
+    });
 
     document.getElementById('btn-generate-audit-batch')?.addEventListener('click', async () => {
         try {
@@ -1298,23 +1339,76 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btn-submit-batch')?.addEventListener('click', async () => {
         try {
-            const reviews = currentBatchData.map(item => ({
-                auditId: item.id,
-                decision: item.decision,
-                rejectionReason: item.rejectionReason,
-                notes: item.notes
-            }));
+            const submitBtn = document.getElementById('btn-submit-batch');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">sync</span> Submitting...';
 
-            const data = await apiRequest('/api/admin/manual-audits/batch-review', {
-                method: 'POST',
-                body: JSON.stringify({ reviews })
+            const groups = {};
+            currentBatchData.forEach(item => {
+                const key = ${item.decision}||;
+                if (!groups[key]) {
+                    groups[key] = {
+                        action: item.decision === 'APPROVED' ? 'approve' : 'reject',
+                        reason: item.decision === 'REJECTED' ? item.rejectionReason : null,
+                        notes: item.decision === 'REJECTED' ? item.notes : null,
+                        auditIds: [],
+                        items: []
+                    };
+                }
+                groups[key].auditIds.push(item.id);
+                groups[key].items.push(item);
             });
 
-            showToast(data.message, false);
-            closeBatchWorkspace();
-            fetchManualAuditsOverview(); // refresh overview and list
+            const requests = Object.values(groups).map(group => {
+                return apiRequest('/api/admin/manual-audits/batch-review', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        auditIds: group.auditIds,
+                        action: group.action,
+                        reason: group.reason,
+                        notes: group.notes
+                    })
+                }).then(res => ({ group, res }));
+            });
+
+            const results = await Promise.allSettled(requests);
+            
+            let successCount = 0;
+            let failureCount = 0;
+            let failedItems = [];
+
+            results.forEach(result => {
+                if (result.status === 'fulfilled') {
+                    successCount += result.value.group.items.length;
+                } else {
+                    failureCount += result.reason?.group?.items?.length || 0;
+                    if (result.reason && result.reason.group) {
+                        failedItems.push(...result.reason.group.items);
+                    } else {
+                        console.error('Batch review error:', result.reason);
+                    }
+                }
+            });
+
+            if (failureCount === 0) {
+                showToast(Successfully processed  audits., false);
+                closeBatchWorkspace();
+            } else {
+                showToast(Batch submitted partially.  succeeded,  failed. Please retry remaining., true);
+                currentBatchData = failedItems;
+                renderBatchWorkspace();
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">done_all</span> Submit Batch Decisions';
+                submitBtn.disabled = false;
+            }
+
+            fetchManualAuditsOverview(); // Exactly ONE queue refresh
         } catch (error) {
-            showToast(error.message, true);
+            showToast(error.message || 'An unexpected error occurred.', true);
+            const submitBtn = document.getElementById('btn-submit-batch');
+            if (submitBtn) {
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">done_all</span> Submit Batch Decisions';
+                submitBtn.disabled = false;
+            }
         }
     });
 
@@ -1326,3 +1420,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 });
+
+
+
+
+

@@ -1217,6 +1217,25 @@
 
                         <!-- All Pending Audits List (Default View) -->
                         <div id="all-pending-audits-view">
+                            <div class="p-4 bg-surface-container-low border-b border-surface-container flex flex-wrap gap-4 items-center justify-between">
+                                <div class="flex flex-wrap gap-3 items-center w-full md:w-auto">
+                                    <div class="relative w-full md:w-64">
+                                        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+                                        <input type="text" id="audit-search-input" placeholder="Search by student or task..." class="w-full pl-9 pr-3 py-1.5 text-sm border border-outline-variant rounded bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-colors">
+                                    </div>
+                                    <select id="audit-status-filter" class="text-sm p-1.5 border border-outline-variant rounded bg-surface focus:border-primary outline-none">
+                                        <option value="PENDING">Pending Review</option>
+                                        <option value="UNDER_REVIEW">Under Review</option>
+                                        <option value="APPROVED">Approved</option>
+                                        <option value="REJECTED">Rejected</option>
+                                        <option value="">All Statuses</option>
+                                    </select>
+                                    <select id="audit-sort-select" class="text-sm p-1.5 border border-outline-variant rounded bg-surface focus:border-primary outline-none">
+                                        <option value="newest">Newest First</option>
+                                        <option value="oldest">Oldest First</option>
+                                    </select>
+                                </div>
+                            </div>
                             <div class="overflow-x-auto">
                                 <table class="w-full text-left text-sm whitespace-nowrap">
                                     <thead class="bg-surface-container-low text-on-surface-variant border-b border-surface-container">
@@ -1264,11 +1283,28 @@
             <div class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                     <h2 class="text-3xl font-headline font-bold text-on-surface mb-2">History</h2>
-                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Historical records of actions and tasks.</p>
+                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Historical records of manual actions and task outcomes.</p>
                 </div>
             </div>
             <div id="history-container" class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
-                <!-- Dynamic content -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm whitespace-nowrap">
+                        <thead class="bg-surface-container-low text-on-surface-variant border-b border-surface-container">
+                            <tr>
+                                <th class="px-6 py-3 font-semibold">Audit ID</th>
+                                <th class="px-6 py-3 font-semibold">Student Name</th>
+                                <th class="px-6 py-3 font-semibold">Task</th>
+                                <th class="px-6 py-3 font-semibold text-center">Outcome</th>
+                                <th class="px-6 py-3 font-semibold">Reviewed By</th>
+                                <th class="px-6 py-3 font-semibold text-right">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-list" class="divide-y divide-surface-container">
+                            <!-- Populated via JS -->
+                            <tr><td colspan="6" class="px-6 py-8 text-center text-sm text-on-surface-variant">Loading history...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </section>
 
@@ -1277,11 +1313,25 @@
             <div class="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                     <h2 class="text-3xl font-headline font-bold text-on-surface mb-2">Review Logs</h2>
-                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Logs of administrative reviews and audits.</p>
+                    <p class="text-on-surface-variant text-body-lg max-w-2xl">Detailed audit logs for administrative reviews.</p>
                 </div>
             </div>
             <div id="review-logs-container" class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
-                <!-- Dynamic content -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm whitespace-nowrap">
+                        <thead class="bg-surface-container-low text-on-surface-variant border-b border-surface-container">
+                            <tr>
+                                <th class="px-6 py-3 font-semibold">Log ID</th>
+                                <th class="px-6 py-3 font-semibold">Message</th>
+                                <th class="px-6 py-3 font-semibold">Timestamp</th>
+                            </tr>
+                        </thead>
+                        <tbody id="review-logs-list" class="divide-y divide-surface-container">
+                            <!-- Populated via JS -->
+                            <tr><td colspan="3" class="px-6 py-8 text-center text-sm text-on-surface-variant">Loading logs...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </section>
 
@@ -1330,3 +1380,6 @@
     <script src="js/admin.js"></script>
 </body>
 </html>
+
+
+
