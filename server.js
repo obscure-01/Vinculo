@@ -76,6 +76,17 @@ app.get('/api/system/youtube-status', async (req, res) => {
   }
 });
 
+// Meta Compliance Pages (Privacy, Terms, Data Deletion)
+app.get('/privacy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
+});
+app.get('/terms', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
+});
+app.get('/delete-data', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'delete-data.html'));
+});
+
 // Fallback to landing page for undefined routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
