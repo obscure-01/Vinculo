@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { authenticateToken, requireRole } = require('../middleware');
+const { authenticateToken, requireRole } = require('../express-middleware');
 
 // Protect all routes with JWT and check for 'Student' role
 router.use(authenticateToken, requireRole('Student'));

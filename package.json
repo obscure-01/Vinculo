@@ -4,7 +4,9 @@
   "description": "Social Media Engagement Tracking Platform for colleges",
   "main": "server.js",
   "scripts": {
+    "dev": "node server.js",
     "start": "node server.js",
+    "build": "next build",
     "db:init": "node db_init.js"
   },
   "dependencies": {
@@ -13,7 +15,10 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.11.5"
+    "next": "^14.2.4",
+    "pg": "^8.11.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "author": "Aman Chapadiya",
   "license": "ISC"

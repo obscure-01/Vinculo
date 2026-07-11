@@ -3,6 +3,11 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 const { pool } = require('./db');
+const next = require('next');
+
+const dev = process.env.NODE_ENV !== 'production';
+const nextApp = next({ dev });
+const handle = nextApp.getRequestHandler();
 
 // In-memory storage for verification diagnostics
 global.verificationDiagnostics = [];
@@ -20,76 +25,7 @@ const authRouter = require('./routes/auth');
 const adminRouter = require('./routes/admin');
 const studentRouter = require('./routes/student');
 
-const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Log incoming requests for development debugging
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-  next();
-});
-
-// Serve static frontend assets from /public folder
-app.use(express.static(path.join(__dirname, 'public')));
-
-// API Routes
-app.use('/api/auth', authRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/student', studentRouter);
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date() });
-});
-
-app.get('/api/system/youtube-status', async (req, res) => {
-  try {
-    const quotaResult = await pool.query("SELECT COALESCE(SUM(quota_cost), 0) AS used_today FROM youtube_api_usage WHERE DATE(created_at) = CURRENT_DATE");
-    const lastReqResult = await pool.query("SELECT status, response_code, created_at FROM youtube_api_usage ORDER BY created_at DESC LIMIT 1");
-    
-    const usedToday = parseInt(quotaResult.rows[0].used_today, 10);
-    const lastReq = lastReqResult.rows.length > 0 ? lastReqResult.rows[0] : null;
-
-    res.json({
-      envKeyPresent: !!process.env.YOUTUBE_API_KEY,
-      verificationMode: process.env.YOUTUBE_API_KEY ? "REAL_API" : "MOCK",
-      startupDetectedKey: global.youtubeApiStatus.status === 'Configured',
-      quota: {
-        usedToday: usedToday,
-        remaining: 10000 - usedToday,
-        percentage: ((usedToday / 10000) * 100).toFixed(2)
-      },
-      lastRequest: lastReq ? {
-        status: lastReq.status,
-        responseCode: lastReq.response_code,
-        timestamp: lastReq.created_at
-      } : null
-    });
-  } catch (error) {
-    console.error('Error fetching youtube status:', error);
-    res.status(500).json({ error: 'Failed to retrieve youtube status.' });
-  }
-});
-
-// Meta Compliance Pages (Privacy, Terms, Data Deletion)
-app.get('/privacy', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
-});
-app.get('/terms', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
-});
-app.get('/delete-data', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'delete-data.html'));
-});
-
-// Fallback to landing page for undefined routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
 
 // Start Server after database check
 const fs = require('fs');
@@ -159,31 +95,90 @@ async function checkAndInitializeDatabase() {
   }
 }
 
-checkAndInitializeDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`=========================================`);
-    console.log(` EngageHub MVP Server started on port ${PORT}`);
-    console.log(` Local link: http://localhost:${PORT}`);
-    
-    console.log(`\\n[STARTUP DIAGNOSTIC]`);
-    console.log(`YOUTUBE_API_KEY Present: ${!!process.env.YOUTUBE_API_KEY ? 'TRUE' : 'FALSE'}`);
-    
-    // Validate YouTube API Key configuration
-    if (process.env.YOUTUBE_API_KEY) {
-      console.log(` YouTube API Status: Configured`);
-    } else {
-      console.log(` YouTube API Status: Missing API Key`);
-      console.warn(` [WARNING] YouTube Comment Verification will fail with Configuration Error.`);
+nextApp.prepare().then(() => {
+  const app = express();
+
+  // Middleware
+  app.use(cors());
+  app.use(express.json());
+
+  // Log incoming requests for development debugging
+  app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+  });
+
+  // API Routes
+  app.use('/api/auth', authRouter);
+  app.use('/api/admin', adminRouter);
+  app.use('/api/student', studentRouter);
+
+  // Health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'OK', timestamp: new Date() });
+  });
+
+  app.get('/api/system/youtube-status', async (req, res) => {
+    try {
+      const quotaResult = await pool.query("SELECT COALESCE(SUM(quota_cost), 0) AS used_today FROM youtube_api_usage WHERE DATE(created_at) = CURRENT_DATE");
+      const lastReqResult = await pool.query("SELECT status, response_code, created_at FROM youtube_api_usage ORDER BY created_at DESC LIMIT 1");
+      
+      const usedToday = parseInt(quotaResult.rows[0].used_today, 10);
+      const lastReq = lastReqResult.rows.length > 0 ? lastReqResult.rows[0] : null;
+
+      res.json({
+        envKeyPresent: !!process.env.YOUTUBE_API_KEY,
+        verificationMode: process.env.YOUTUBE_API_KEY ? "REAL_API" : "MOCK",
+        startupDetectedKey: global.youtubeApiStatus.status === 'Configured',
+        quota: {
+          usedToday: usedToday,
+          remaining: 10000 - usedToday,
+          percentage: ((usedToday / 10000) * 100).toFixed(2)
+        },
+        lastRequest: lastReq ? {
+          status: lastReq.status,
+          responseCode: lastReq.response_code,
+          timestamp: lastReq.created_at
+        } : null
+      });
+    } catch (error) {
+      console.error('Error fetching youtube status:', error);
+      res.status(500).json({ error: 'Failed to retrieve youtube status.' });
     }
-    
-    console.log(`FACEBOOK_PAGE_ACCESS_TOKEN Present: ${!!process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? 'TRUE' : 'FALSE'}`);
-    if (process.env.FACEBOOK_PAGE_ACCESS_TOKEN) {
-      console.log(` Facebook API Status: Configured`);
-    } else {
-      console.log(` Facebook API Status: Missing Token`);
-      console.warn(` [WARNING] Facebook Comment Verification will fail with Configuration Error.`);
-    }
-    
-    console.log(`=========================================`);
+  });
+
+  // Fallback to Next.js handler
+  app.all('*', (req, res) => {
+    return handle(req, res);
+  });
+
+  // Start Server after database check
+  checkAndInitializeDatabase().then(() => {
+    app.listen(PORT, () => {
+      console.log(`=========================================`);
+      console.log(` EngageHub MVP Server started on port ${PORT}`);
+      console.log(` Local link: http://localhost:${PORT}`);
+      
+      console.log(`\n[STARTUP DIAGNOSTIC]`);
+      console.log(`YOUTUBE_API_KEY Present: ${!!process.env.YOUTUBE_API_KEY ? 'TRUE' : 'FALSE'}`);
+      
+      // Validate YouTube API Key configuration
+      if (process.env.YOUTUBE_API_KEY) {
+        console.log(` YouTube API Status: Configured`);
+      } else {
+        console.log(` YouTube API Status: Missing API Key`);
+        console.warn(` [WARNING] YouTube Comment Verification will fail with Configuration Error.`);
+      }
+      
+      console.log(`FACEBOOK_PAGE_ACCESS_TOKEN Present: ${!!process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? 'TRUE' : 'FALSE'}`);
+      if (process.env.FACEBOOK_PAGE_ACCESS_TOKEN) {
+        console.log(` Facebook API Status: Configured`);
+      } else {
+        console.log(` Facebook API Status: Missing Token`);
+        console.warn(` [WARNING] Facebook Comment Verification will fail with Configuration Error.`);
+      }
+      
+      console.log(`=========================================`);
+    });
   });
 });
