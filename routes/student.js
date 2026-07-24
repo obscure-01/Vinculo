@@ -116,18 +116,7 @@ router.get('/tasks', async (req, res) => {
         t.platform, 
         t.social_link, 
         t.expiry_date,
-        t.verification_method,
-        t.engagement_type,
-        CASE 
-          WHEN EXISTS (
-            SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
-          ) THEN 'OPENED'
-          ELSE 'PENDING'
-        END as status,
-        (SELECT sa.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 LIMIT 1) as activity_status,
-        (SELECT ma.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as manual_audit_status,
-        (SELECT rl.rejection_reason FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id JOIN review_logs rl ON rl.manual_audit_id = ma.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY rl.created_at DESC LIMIT 1) as rejection_reason,
-        (SELECT ma.reviewed_at FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as reviewed_at,
+        t.status,
         (
           SELECT MIN(sa.created_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
         ) as opened_at
@@ -143,8 +132,35 @@ router.get('/tasks', async (req, res) => {
         )
       ORDER BY t.created_at DESC
     `;
-    const result = await db.query(tasksQuery, [userId]);
-    res.json(result.rows);
+    const tasksResult = await db.query(tasksQuery, [userId]);
+    const tasks = tasksResult.rows;
+
+    if (tasks.length === 0) {
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+    const engagementsQuery = `
+      SELECT te.id, te.task_id, te.engagement_type, te.verification_type,
+             te.is_required, te.points,
+             sa.status AS activity_status,
+             ma.status AS manual_audit_status,
+             rl.rejection_reason
+      FROM task_engagements te
+      LEFT JOIN student_activities sa ON sa.task_engagement_id = te.id AND sa.user_id = $1
+      LEFT JOIN manual_audits ma ON ma.student_activity_id = sa.id
+      LEFT JOIN review_logs rl ON rl.manual_audit_id = ma.id
+      WHERE te.task_id = ANY($2)
+    `;
+    const engagementsResult = await db.query(engagementsQuery, [userId, taskIds]);
+    const engagements = engagementsResult.rows;
+
+    const taskMap = new Map(tasks.map(t => [t.id, { ...t, engagements: [] }]));
+    for (const eng of engagements) {
+      taskMap.get(eng.task_id)?.engagements.push(eng);
+    }
+
+    res.json(Array.from(taskMap.values()));
   } catch (error) {
     console.error('Error fetching student tasks:', error);
     res.status(500).json({ error: 'Failed to retrieve tasks.' });
@@ -162,18 +178,10 @@ router.get('/tasks/completed', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
-        t.verification_method,
-        t.engagement_type,
         (
           SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
         ) as completed_at,
-        NULL as time_spent,
-        COALESCE((
-          SELECT sa.status FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = $1 LIMIT 1
-        ), 'Not Attempted') as comment_status,
-        COALESCE((
-          SELECT te.points FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = $1 AND sa.status IN ('Verified', 'Approved') LIMIT 1
-        ), 0) as comment_points_awarded
+        NULL as time_spent
       FROM tasks t
       WHERE NOT EXISTS (
         SELECT 1 FROM task_engagements te
@@ -187,8 +195,35 @@ router.get('/tasks/completed', async (req, res) => {
       )
       ORDER BY completed_at DESC
     `;
-    const result = await db.query(completedQuery, [userId]);
-    res.json(result.rows);
+    const tasksResult = await db.query(completedQuery, [userId]);
+    const tasks = tasksResult.rows;
+
+    if (tasks.length === 0) {
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+    const engagementsQuery = `
+      SELECT te.id, te.task_id, te.engagement_type, te.verification_type,
+             te.is_required, te.points,
+             sa.status AS activity_status,
+             ma.status AS manual_audit_status,
+             rl.rejection_reason
+      FROM task_engagements te
+      LEFT JOIN student_activities sa ON sa.task_engagement_id = te.id AND sa.user_id = $1
+      LEFT JOIN manual_audits ma ON ma.student_activity_id = sa.id
+      LEFT JOIN review_logs rl ON rl.manual_audit_id = ma.id
+      WHERE te.task_id = ANY($2)
+    `;
+    const engagementsResult = await db.query(engagementsQuery, [userId, taskIds]);
+    const engagements = engagementsResult.rows;
+
+    const taskMap = new Map(tasks.map(t => [t.id, { ...t, engagements: [] }]));
+    for (const eng of engagements) {
+      taskMap.get(eng.task_id)?.engagements.push(eng);
+    }
+
+    res.json(Array.from(taskMap.values()));
   } catch (error) {
     console.error('Error fetching student completed tasks:', error);
     res.status(500).json({ error: 'Failed to retrieve completed tasks.' });
@@ -206,30 +241,45 @@ router.get('/tasks/progress', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
-        t.verification_method,
-        t.engagement_type,
         (
           SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
         ) as completed_at,
-        NULL as time_spent,
-        (SELECT sa.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 LIMIT 1) as activity_status,
-        (SELECT ma.status FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as manual_audit_status,
-        (SELECT rl.rejection_reason FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id JOIN review_logs rl ON rl.manual_audit_id = ma.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY rl.created_at DESC LIMIT 1) as rejection_reason,
-        (SELECT ma.reviewed_at FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id JOIN manual_audits ma ON ma.student_activity_id = sa.id WHERE te.task_id = t.id AND sa.user_id = $1 ORDER BY ma.submitted_at DESC LIMIT 1) as reviewed_at,
-        COALESCE((
-          SELECT sa.status FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = $1 LIMIT 1
-        ), 'Not Attempted') as comment_status,
-        COALESCE((
-          SELECT te.points FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND te.engagement_type = 'COMMENT' AND sa.user_id = $1 AND sa.status IN ('Verified', 'Approved') LIMIT 1
-        ), 0) as comment_points_awarded
+        NULL as time_spent
       FROM tasks t
       WHERE EXISTS (
         SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status != 'Pending'
       )
       ORDER BY t.created_at DESC
     `;
-    const result = await db.query(progressQuery, [userId]);
-    res.json(result.rows);
+    const tasksResult = await db.query(progressQuery, [userId]);
+    const tasks = tasksResult.rows;
+
+    if (tasks.length === 0) {
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+    const engagementsQuery = `
+      SELECT te.id, te.task_id, te.engagement_type, te.verification_type,
+             te.is_required, te.points,
+             sa.status AS activity_status,
+             ma.status AS manual_audit_status,
+             rl.rejection_reason
+      FROM task_engagements te
+      LEFT JOIN student_activities sa ON sa.task_engagement_id = te.id AND sa.user_id = $1
+      LEFT JOIN manual_audits ma ON ma.student_activity_id = sa.id
+      LEFT JOIN review_logs rl ON rl.manual_audit_id = ma.id
+      WHERE te.task_id = ANY($2)
+    `;
+    const engagementsResult = await db.query(engagementsQuery, [userId, taskIds]);
+    const engagements = engagementsResult.rows;
+
+    const taskMap = new Map(tasks.map(t => [t.id, { ...t, engagements: [] }]));
+    for (const eng of engagements) {
+      taskMap.get(eng.task_id)?.engagements.push(eng);
+    }
+
+    res.json(Array.from(taskMap.values()));
   } catch (error) {
     console.error('Error fetching student task progress:', error);
     res.status(500).json({ error: 'Failed to retrieve task progress.' });

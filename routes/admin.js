@@ -71,9 +71,24 @@ router.get('/overview', async (req, res) => {
   }
 });
 
+// Constants for Stage 1 Business Rules
+const DEFAULT_ENGAGEMENT_POINTS = {
+  VISIT: 10,
+  ACTION: 15
+};
+
 // 2. Create Task
 router.post('/tasks', async (req, res) => {
-  const { title, platform, socialLink, durationDays, verificationMethod, engagementType } = req.body;
+  const { 
+    title, 
+    platform, 
+    socialLink, 
+    durationDays, 
+    verificationMethod, 
+    verification_method,
+    engagementType,
+    engagement_type 
+  } = req.body;
 
   if (!title || !platform || !socialLink) {
     return res.status(400).json({ error: 'Title, platform, and social media link are required.' });
@@ -91,25 +106,57 @@ router.post('/tasks', async (req, res) => {
   const finalDurationDays = isNaN(parsedDuration) || parsedDuration <= 0 ? 7 : parsedDuration;
   const expiryDate = new Date(Date.now() + finalDurationDays * 24 * 60 * 60 * 1000);
 
-  // Validate verification method and engagement type
-  const vMethod = verificationMethod === 'MANUAL' ? 'MANUAL' : 'AUTOMATIC';
-  const validEngagements = ['LIKE', 'COMMENT', 'REACTION', 'SAVE', 'SHARE', 'FOLLOW'];
-  const eType = validEngagements.includes(engagementType) ? engagementType : 'COMMENT';
+  // Maintain backward compatibility for payload variables
+  const finalVerificationMethod = verification_method || verificationMethod;
+  const finalEngagementType = engagement_type || engagementType;
 
+  // Validate verification method and engagement type
+  const vMethod = finalVerificationMethod === 'MANUAL' ? 'MANUAL' : 'AUTOMATIC';
+  const validEngagements = ['LIKE', 'COMMENT', 'REACTION', 'SAVE', 'SHARE', 'FOLLOW'];
+  const eType = validEngagements.includes(finalEngagementType) ? finalEngagementType : 'COMMENT';
+
+  const client = await db.pool.connect();
   try {
-    const insertQuery = `
-      INSERT INTO tasks (title, platform, social_link, duration_days, expiry_date, verification_method, engagement_type)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    await client.query('BEGIN');
+    
+    const insertTaskQuery = `
+      INSERT INTO tasks (title, platform, social_link, duration_days, expiry_date)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `;
-    const result = await db.query(insertQuery, [title.trim(), normalizedPlatform, socialLink.trim(), finalDurationDays, expiryDate, vMethod, eType]);
+    const taskResult = await client.query(insertTaskQuery, [
+      title.trim(), 
+      normalizedPlatform, 
+      socialLink.trim(), 
+      finalDurationDays, 
+      expiryDate
+    ]);
+    const newTask = taskResult.rows[0];
+
+    const visitEngagementQuery = `
+      INSERT INTO task_engagements (task_id, engagement_type, verification_type, is_required, points)
+      VALUES ($1, 'VISIT', 'AUTOMATIC', TRUE, $2)
+    `;
+    await client.query(visitEngagementQuery, [newTask.id, DEFAULT_ENGAGEMENT_POINTS.VISIT]);
+
+    const actionEngagementQuery = `
+      INSERT INTO task_engagements (task_id, engagement_type, verification_type, is_required, points)
+      VALUES ($1, $2, $3, TRUE, $4)
+    `;
+    await client.query(actionEngagementQuery, [newTask.id, eType, vMethod, DEFAULT_ENGAGEMENT_POINTS.ACTION]);
+
+    await client.query('COMMIT');
+    
     res.status(201).json({
       message: 'Task created successfully.',
-      task: result.rows[0]
+      task: newTask
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error creating task:', error);
     res.status(500).json({ error: 'Failed to create task.' });
+  } finally {
+    client.release();
   }
 });
 

@@ -1423,6 +1423,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btn-generate-audit-batch').disabled = false;
     }
 
+    ViewManager.init('dashboard');
 });
 
 

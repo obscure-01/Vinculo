@@ -216,7 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Open Task Action
     window.openTask = async function(taskId) {
-        alertBanner.classList.add('hidden'); // Clear alert banner
+
         try {
             const data = await apiRequest(`/api/student/tasks/${taskId}/open`, { method: 'POST' });
             // Open task link in a new tab
@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Withdraw Declaration Action
     window.withdrawDeclaration = async function(taskId) {
         if (!confirm('Are you sure you want to withdraw this task from review?')) return;
-        alertBanner.classList.add('hidden'); // Clear alert banner
+
         try {
             const data = await apiRequest(`/api/student/tasks/${taskId}/withdraw`, { method: 'POST' });
             showAlert(data.message, false);
@@ -277,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Complete Task Action
     window.completeTask = async function(taskId) {
-        alertBanner.classList.add('hidden'); // Clear alert banner
+
         try {
             const data = await apiRequest(`/api/student/tasks/${taskId}/complete`, { method: 'POST' });
             // Show Success Notification
@@ -379,7 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     window.verifyComment = async function(taskId) {
-        alertBanner.classList.add('hidden'); // Clear alert banner
+
         try {
             const data = await apiRequest(`/api/student/tasks/${taskId}/verify-comment`, { method: 'POST' });
             
