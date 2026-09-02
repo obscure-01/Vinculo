@@ -207,6 +207,65 @@ router.delete('/tasks/:id', async (req, res) => {
   }
 });
 
+// 3b. Cancel Task (IB-007)
+router.post('/tasks/:id/cancel', async (req, res) => {
+  const taskId = req.params.id;
+  const adminId = req.user.id;
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const taskResult = await client.query('SELECT id, status FROM tasks WHERE id = $1 FOR UPDATE', [taskId]);
+    if (taskResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Task not found or already cancelled.' });
+    }
+
+    const task = taskResult.rows[0];
+    if (task.status === 'CANCELLED') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Task not found or already cancelled.' });
+    }
+
+    await client.query('UPDATE tasks SET status = \'CANCELLED\' WHERE id = $1', [taskId]);
+
+    const eligibleAudits = await client.query(`
+      SELECT ma.id, sa.id as activity_id, ma.status
+      FROM manual_audits ma
+      JOIN student_activities sa ON ma.student_activity_id = sa.id
+      JOIN task_engagements te ON sa.task_engagement_id = te.id
+      WHERE te.task_id = $1 AND ma.status IN ('PENDING', 'UNDER_REVIEW') FOR UPDATE
+    `, [taskId]);
+
+    let auditsCancelled = 0;
+    if (eligibleAudits.rows.length > 0) {
+      const auditIds = eligibleAudits.rows.map(r => r.id);
+      const activityIds = eligibleAudits.rows.map(r => r.activity_id);
+
+      await client.query(`UPDATE manual_audits SET status = 'CANCELLED' WHERE id = ANY($1)`, [auditIds]);
+      await client.query(`UPDATE student_activities SET status = 'Cancelled' WHERE id = ANY($1)`, [activityIds]);
+
+      for (const audit of eligibleAudits.rows) {
+        await client.query(`
+          INSERT INTO manual_audit_history (audit_id, previous_status, new_status, reviewer_id, reason, notes)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [audit.id, audit.status, 'CANCELLED', adminId, 'Task Cancelled', 'Administrative cancellation']);
+      }
+      auditsCancelled = auditIds.length;
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Task cancelled.', audits_cancelled: auditsCancelled });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Task cancellation failed:', err);
+    res.status(500).json({ error: 'Failed to cancel task.' });
+  } finally {
+    client.release();
+  }
+});
+
 // 4. Analytics Overview & Tables
 router.get('/analytics', async (req, res) => {
   try {
@@ -748,7 +807,10 @@ router.post('/manual-audits/batch-review', async (req, res) => {
     const result = await manualAuditService.batchReviewAudits(auditIds, action, reason, notes, req.user.id, req.user.name);
     res.json(result);
   } catch (error) {
-    console.error('Unexpected error in batch review:', error.message);
+    if (error.status) {
+      return res.status(error.status).json(error);
+    }
+    console.error('Unexpected error in batch review:', error);
     res.status(500).json({ error: 'An unexpected error occurred during batch review.', details: error.message });
   }
 });

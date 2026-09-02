@@ -10,9 +10,9 @@ class ManualAuditService {
     try {
       await client.query('BEGIN');
       
-      const taskCheck = await client.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+      const taskCheck = await client.query('SELECT * FROM tasks WHERE id = $1 AND status != \'CANCELLED\' FOR SHARE', [taskId]);
       if (taskCheck.rows.length === 0) {
-        throw { status: 404, message: 'Task not found.' };
+        throw { status: 404, message: 'Task not found or cancelled.' };
       }
       const task = taskCheck.rows[0];
       
@@ -20,13 +20,10 @@ class ManualAuditService {
         throw { status: 400, message: 'This task has expired.' };
       }
       
-      if (task.verification_method !== 'MANUAL') {
-        throw { status: 400, message: 'This task does not support manual auditing.' };
-      }
 
-      const engagementsCheck = await client.query('SELECT id, engagement_type FROM task_engagements WHERE task_id = $1', [taskId]);
+      const engagementsCheck = await client.query('SELECT id, engagement_type FROM task_engagements WHERE task_id = $1 AND verification_type = \'MANUAL\'', [taskId]);
       if (engagementsCheck.rows.length === 0) {
-         throw { status: 400, message: 'Task has no configured engagements.' };
+         throw { status: 400, message: 'Task has no manual engagements configured.' };
       }
       
       const userCheck = await client.query('SELECT instagram_username, facebook_display_name, facebook_profile FROM users WHERE id = $1', [userId]);
@@ -67,20 +64,36 @@ class ManualAuditService {
          const saId = saResult.rows[0].id;
 
          const existingAudit = await client.query(
-           'SELECT status FROM manual_audits WHERE student_activity_id = $1 AND status != $2',
-           [saId, 'REJECTED']
+           'SELECT id, status FROM manual_audits WHERE student_activity_id = $1',
+           [saId]
          );
          
+         let isResubmission = false;
          if (existingAudit.rows.length > 0) {
-           throw { status: 400, message: 'Submission already exists for this task.' };
+           const currentStatus = existingAudit.rows[0].status;
+           if (currentStatus !== 'REJECTED') {
+             throw { status: 400, message: `Submission cannot be made because current status is ${currentStatus}.` };
+           }
+           isResubmission = true;
          }
 
          const insertQuery = `
-           INSERT INTO manual_audits (student_activity_id, identity_snapshot_id, status)
-           VALUES ($1, $2, 'PENDING')
+           INSERT INTO manual_audits (student_activity_id, identity_snapshot_id, status, submitted_at)
+           VALUES ($1, $2, 'PENDING', CURRENT_TIMESTAMP)
+           ON CONFLICT (student_activity_id) DO UPDATE SET 
+             status = 'PENDING', 
+             identity_snapshot_id = EXCLUDED.identity_snapshot_id, 
+             submitted_at = CURRENT_TIMESTAMP
            RETURNING *
          `;
          const maResult = await client.query(insertQuery, [saId, snapshotId]);
+         const auditId = maResult.rows[0].id;
+         
+         await client.query(
+           `INSERT INTO manual_audit_history (audit_id, previous_status, new_status, reason, notes)
+            VALUES ($1, $2, $3, $4, $5)`,
+           [auditId, isResubmission ? 'REJECTED' : null, 'PENDING', 'Student Submission', null]
+         );
          
          if (!firstAuditRec) firstAuditRec = maResult.rows[0];
       }
@@ -209,30 +222,23 @@ class ManualAuditService {
   }
 
   async batchReviewAudits(auditIds, action, reason, notes, reviewerId, reviewerName) {
-    const results = {
-      totalSelected: auditIds.length,
-      successfullyProcessed: 0,
-      failed: 0,
-      skipped: 0,
-      duplicateRequests: 0,
-      details: []
-    };
+    if (!auditIds || auditIds.length === 0) {
+      throw { status: 400, error: 'Empty batch request.', auditId: null };
+    }
 
     const processedInBatch = new Set();
-
     for (const auditId of auditIds) {
       if (processedInBatch.has(auditId)) {
-        results.duplicateRequests++;
-        results.skipped++;
-        results.details.push({ auditId, status: 'SKIPPED', message: 'Duplicate ID in request batch.' });
-        continue;
+        throw { status: 400, error: 'Validation failed for audit: Duplicate audit ID in batch request.', auditId };
       }
       processedInBatch.add(auditId);
+    }
 
-      const client = await db.pool.connect();
-      try {
-        await client.query('BEGIN');
-        
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      for (const auditId of auditIds) {
         const auditResult = await client.query(
           `SELECT ma.*, sa.user_id, sa.task_engagement_id, sa.status as activity_status,
                   te.points, te.engagement_type, te.task_id, t.title as task_title, t.platform as task_platform
@@ -240,31 +246,22 @@ class ManualAuditService {
            JOIN student_activities sa ON ma.student_activity_id = sa.id
            JOIN task_engagements te ON sa.task_engagement_id = te.id
            JOIN tasks t ON te.task_id = t.id
-           WHERE ma.id = $1 FOR UPDATE`,
+           WHERE ma.id = $1 FOR UPDATE OF ma, sa, te`,
           [auditId]
         );
 
         if (auditResult.rows.length === 0) {
-          results.failed++;
-          results.details.push({ auditId, status: 'FAILED', message: 'Audit record not found.' });
-          await client.query('ROLLBACK');
-          continue;
+          throw { status: 400, error: 'Validation failed for audit: Audit record not found.', auditId };
         }
 
         const audit = auditResult.rows[0];
 
         if (!audit.identity_snapshot_id) {
-          results.failed++;
-          results.details.push({ auditId, status: 'FAILED', message: 'Missing immutable identity snapshot.' });
-          await client.query('ROLLBACK');
-          continue;
+          throw { status: 400, error: 'Validation failed for audit: Missing immutable identity snapshot.', auditId };
         }
 
         if (['APPROVED', 'REJECTED', 'CANCELLED'].includes(audit.status)) {
-          results.skipped++;
-          results.details.push({ auditId, status: 'SKIPPED', message: `Already in terminal state: ${audit.status}` });
-          await client.query('ROLLBACK');
-          continue;
+          throw { status: 400, error: `Validation failed for audit: Already in terminal state (${audit.status}).`, auditId };
         }
 
         const previousStatus = audit.status;
@@ -299,7 +296,13 @@ class ManualAuditService {
 
         await client.query(
           `INSERT INTO review_logs (manual_audit_id, reviewer_id, outcome, rejection_reason, generated_note)
-           VALUES ($1, $2, $3, $4, $5)`,
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (manual_audit_id) DO UPDATE SET
+             reviewer_id = EXCLUDED.reviewer_id,
+             outcome = EXCLUDED.outcome,
+             rejection_reason = EXCLUDED.rejection_reason,
+             generated_note = EXCLUDED.generated_note,
+             created_at = CURRENT_TIMESTAMP`,
           [
             auditId, 
             reviewerId, 
@@ -321,22 +324,20 @@ class ManualAuditService {
             notes || null
           ]
         );
-
-        await client.query('COMMIT');
-        results.successfullyProcessed++;
-        results.details.push({ auditId, status: 'SUCCESS', message: `Successfully ${action}d.` });
-
-      } catch (error) {
-        await client.query('ROLLBACK');
-        console.error(`Transaction failed for auditId ${auditId}:`, error);
-        results.failed++;
-        results.details.push({ auditId, status: 'FAILED', message: error.message });
-      } finally {
-        client.release();
       }
-    }
 
-    return results;
+      await client.query('COMMIT');
+      return { message: 'Batch review processed successfully.' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      if (error.status === 400) {
+        throw error;
+      }
+      console.error('Batch transaction failed:', error);
+      throw { status: 500, error: 'Database transaction failed.', originalError: error.message };
+    } finally {
+      client.release();
+    }
   }
 
   async getStudentAudits(studentId) {

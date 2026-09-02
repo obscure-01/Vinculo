@@ -1193,26 +1193,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       }
 
     } else if (platform === 'Instagram') {
-      const client = await db.pool.connect();
-      try {
-        await client.query('BEGIN');
-        if (engagement.points > 0) {
-          await client.query('UPDATE users SET points = points + $1 WHERE id = $2', [engagement.points, userId]);
-        }
-        await client.query(`
-          INSERT INTO student_activities (user_id, task_engagement_id, status, created_at, completed_at)
-          VALUES ($1, $2, 'Verified', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT (user_id, task_engagement_id) DO UPDATE SET status = 'Verified', completed_at = CURRENT_TIMESTAMP
-        `, [userId, engagementId]);
-        await client.query('COMMIT');
-      } catch (txnErr) {
-        await client.query('ROLLBACK');
-        throw txnErr;
-      } finally {
-        client.release();
-      }
-
-      return res.json({ message: `Comment successfully verified! +${engagement.points} Points awarded.`, comment_status: 'Comment Detected' });
+      return res.status(400).json({ message: 'Automatic comment verification is not available for Instagram. Please use the manual declaration flow.', comment_status: 'Manual Required' });
     } else {
       await updateActivityState('Comment Not Verified');
       return res.json({ message: `Automatic comment verification is not available for ${platform}.`, comment_status: 'Comment Not Verified' });
