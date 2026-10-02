@@ -133,7 +133,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const isOpened = task.status === 'OPENED';
                 
                 // Button styling based on status and verification method
-                const isManual = task.verification_method === 'MANUAL';
+                const engagement = task.engagements && task.engagements.length > 0 ? task.engagements[0] : null;
+                const isManual = engagement ? engagement.verification_type === 'MANUAL' : false;
+                const manualAuditStatus = engagement ? engagement.manual_audit_status : null;
+                const rejectionReason = engagement ? engagement.rejection_reason : null;
+                const engagementId = engagement ? engagement.id : null;
                 
                 let buttonText = 'Open Task';
                 let actionHandler = `openTask(${task.id})`;
@@ -142,12 +146,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 let statusBadge = '';
                 let rejectionInfo = '';
 
-                if (task.manual_audit_status === 'PENDING' || task.manual_audit_status === 'UNDER_REVIEW') {
+                if (manualAuditStatus === 'PENDING' || manualAuditStatus === 'UNDER_REVIEW') {
                     statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">PENDING REVIEW</span>`;
-                } else if (task.manual_audit_status === 'REJECTED') {
+                } else if (manualAuditStatus === 'REJECTED') {
                     statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-error">REJECTED</span>`;
-                    if (task.rejection_reason) {
-                        rejectionInfo = `<div class="mt-2 text-xs text-error font-medium flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">error</span> Reason: ${escapeHTML(task.rejection_reason)}</div>`;
+                    if (rejectionReason) {
+                        rejectionInfo = `<div class="mt-2 text-xs text-error font-medium flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">error</span> Reason: ${escapeHTML(rejectionReason)}</div>`;
                     }
                 } else if (isOpened) {
                     statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-container text-on-primary-container border border-primary-fixed-dim">OPENED</span>`;
@@ -155,18 +159,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (isOpened) {
                     if (isManual) {
-                        if (task.manual_audit_status === 'PENDING') {
+                        if (manualAuditStatus === 'PENDING') {
                             buttonText = 'Withdraw';
                             buttonClass = 'bg-surface text-error border border-error hover:bg-error-container';
-                            actionHandler = `withdrawDeclaration(${task.id})`;
-                        } else if (task.manual_audit_status === 'UNDER_REVIEW') {
+                            actionHandler = `withdrawDeclaration(${task.id}, ${engagementId})`;
+                        } else if (manualAuditStatus === 'UNDER_REVIEW') {
                             buttonText = 'Under Review';
                             buttonClass = 'bg-surface-container-high text-on-surface-variant opacity-70 cursor-not-allowed';
                             actionHandler = `return false`;
                         } else {
-                            buttonText = task.manual_audit_status === 'REJECTED' ? 'Resubmit for Review' : 'Submit for Review';
+                            buttonText = manualAuditStatus === 'REJECTED' ? 'Resubmit for Review' : 'Submit for Review';
                             buttonClass = 'bg-secondary text-on-secondary hover:bg-secondary-fixed-dim';
-                            actionHandler = `openManualAuditModal(${task.id}, '${escapeHTML(task.title).replace(/'/g, "\\'")}', '${task.platform}', '${task.engagement_type}')`;
+                            actionHandler = `openManualAuditModal(${task.id}, ${engagementId}, '${escapeHTML(task.title).replace(/'/g, "\\'")}', '${task.platform}', '${task.engagement_type}')`;
                         }
                     } else {
                         buttonText = 'Mark Complete';
@@ -231,9 +235,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Manual Audit Modal Logic
     const manualAuditModal = document.getElementById('manual-audit-modal');
     let currentManualAuditTaskId = null;
+    let currentManualAuditEngagementId = null;
 
-    window.openManualAuditModal = function(taskId, title, platform, engagementType) {
+    window.openManualAuditModal = function(taskId, engagementId, title, platform, engagementType) {
         currentManualAuditTaskId = taskId;
+        currentManualAuditEngagementId = engagementId;
         document.getElementById('modal-task-title').textContent = title;
         document.getElementById('modal-platform').textContent = platform;
         document.getElementById('modal-engagement-type').textContent = engagementType;
@@ -243,6 +249,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function closeManualAuditModal() {
         manualAuditModal.classList.add('hidden');
         currentManualAuditTaskId = null;
+        currentManualAuditEngagementId = null;
     }
 
     document.getElementById('close-manual-audit-btn')?.addEventListener('click', closeManualAuditModal);
@@ -250,9 +257,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('manual-audit-overlay')?.addEventListener('click', closeManualAuditModal);
 
     document.getElementById('confirm-manual-audit-btn')?.addEventListener('click', async () => {
-        if (!currentManualAuditTaskId) return;
+        if (!currentManualAuditTaskId || !currentManualAuditEngagementId) return;
         try {
-            const data = await apiRequest(`/api/student/tasks/${currentManualAuditTaskId}/manual-audit`, { method: 'POST' });
+            const data = await apiRequest(`/api/student/tasks/${currentManualAuditTaskId}/engagements/${currentManualAuditEngagementId}/manual-audit`, { method: 'POST' });
             showAlert(data.message, data.status ? true : false); // If status exists, it's a duplicate, show as warning
             closeManualAuditModal();
             fetchPendingTasks();
@@ -263,11 +270,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Withdraw Declaration Action
-    window.withdrawDeclaration = async function(taskId) {
+    window.withdrawDeclaration = async function(taskId, engagementId) {
         if (!confirm('Are you sure you want to withdraw this task from review?')) return;
 
         try {
-            const data = await apiRequest(`/api/student/tasks/${taskId}/withdraw`, { method: 'POST' });
+            const data = await apiRequest(`/api/student/tasks/${taskId}/engagements/${engagementId}/withdraw`, { method: 'POST' });
             showAlert(data.message, false);
             fetchPendingTasks();
         } catch (error) {
@@ -323,21 +330,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 const platformIcon = getPlatformIcon(task.platform);
                 const formattedDate = task.completed_at ? new Date(task.completed_at).toLocaleString() : 'N/A';
                 const totalPoints = 10 + (task.comment_points_awarded || 0);
-                const isManual = task.verification_method === 'MANUAL';
+                const engagement = task.engagements && task.engagements.length > 0 ? task.engagements[0] : null;
+                const isManual = engagement ? engagement.verification_type === 'MANUAL' : false;
+                const manualAuditStatus = engagement ? engagement.manual_audit_status : null;
+                const rejectionReason = engagement ? engagement.rejection_reason : null;
 
                 let statusBadge = '';
                 let rejectionInfo = '';
                 let pointsHTML = '';
 
                 if (isManual) {
-                    if (task.manual_audit_status === 'APPROVED') {
+                    if (manualAuditStatus === 'APPROVED') {
                         statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-tertiary-container text-on-tertiary-container border border-tertiary-fixed">APPROVED</span>`;
                         pointsHTML = `<p class="text-sm font-bold text-tertiary">${totalPoints} pts earned</p>`;
-                    } else if (task.manual_audit_status === 'REJECTED') {
+                    } else if (manualAuditStatus === 'REJECTED') {
                         statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-error-container text-on-error-container border border-error">REJECTED</span>`;
                         pointsHTML = `<p class="text-sm font-bold text-on-surface-variant line-through opacity-50">${totalPoints} pts earned</p>`;
-                        if (task.rejection_reason) {
-                            rejectionInfo = `<div class="mt-2 text-xs text-error font-medium flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">error</span> Reason: ${escapeHTML(task.rejection_reason)}</div>`;
+                        if (rejectionReason) {
+                            rejectionInfo = `<div class="mt-2 text-xs text-error font-medium flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">error</span> Reason: ${escapeHTML(rejectionReason)}</div>`;
                         }
                     } else { // PENDING or UNDER_REVIEW
                         statusBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">PENDING REVIEW</span>`;

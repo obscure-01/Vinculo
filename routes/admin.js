@@ -777,8 +777,11 @@ router.get('/manual-audits', async (req, res) => {
 // 15. Generate Random Audit Batch
 router.post('/manual-audits/generate-batch', async (req, res) => {
   try {
-    const percentage = global.MANUAL_AUDIT_PERCENTAGE || 25;
-    const result = await manualAuditService.generateAuditBatch(percentage);
+    const options = {
+      percentage: req.body.percentage || global.MANUAL_AUDIT_PERCENTAGE || 25,
+      count: req.body.count
+    };
+    const result = await manualAuditService.generateAuditBatch(options);
     res.json(result);
   } catch (error) {
     console.error('Error generating audit batch:', error);

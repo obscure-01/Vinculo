@@ -428,67 +428,24 @@ router.post('/tasks/:id/complete', async (req, res) => {
     client.release();
   }
 });
-
-// Withdraw task declaration
-router.post('/tasks/:id/withdraw', async (req, res) => {
-  const userId = req.user.id;
-  const taskId = req.params.id;
-
-  const client = await db.pool.connect();
+// Withdraw engagement manual audit
+router.post('/tasks/:taskId/engagements/:engagementId/withdraw', async (req, res) => {
   try {
-    await client.query('BEGIN');
-
-    // Fetch the task and engagements
-    const taskCheck = await client.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
-    if (taskCheck.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-
-    const engagementsCheck = await client.query('SELECT id FROM task_engagements WHERE task_id = $1', [taskId]);
-    if (engagementsCheck.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'No engagements found for this task.' });
-    }
-    const engagementIds = engagementsCheck.rows.map(row => row.id);
-
-    // Update student_activities to 'Pending' for engagements that were 'Submitted' or 'Pending Review'
-    const updateResult = await client.query(`
-      UPDATE student_activities
-      SET status = 'Pending'
-      WHERE user_id = $1 AND task_engagement_id = ANY($2) AND status IN ('Submitted', 'Pending Review')
-      RETURNING *
-    `, [userId, engagementIds]);
-
-    if (updateResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'No submitted activities found to withdraw.' });
-    }
-
-    // Cancel associated manual audits for this user and task to preserve audit history
-    await client.query(`
-      UPDATE manual_audits
-      SET status = 'CANCELLED'
-      WHERE student_activity_id IN (
-        SELECT id FROM student_activities WHERE user_id = $1 AND task_engagement_id = ANY($2)
-      ) AND status = 'PENDING'
-    `, [userId, engagementIds]);
-
-    await client.query('COMMIT');
-    res.json({ message: 'Task declaration withdrawn successfully.' });
+    const result = await manualAuditService.withdrawEngagementAudit(req.user.id, req.params.engagementId);
+    res.json({ message: result.message });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error withdrawing task declaration:', error);
-    res.status(500).json({ error: 'Failed to withdraw task declaration.' });
-  } finally {
-    client.release();
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error withdrawing manual audit:', error);
+    res.status(500).json({ error: 'Failed to withdraw manual audit.' });
   }
 });
 
-// 5. Submit Manual Audit
-router.post('/tasks/:id/manual-audit', async (req, res) => {
+// Submit Engagement Manual Audit
+router.post('/tasks/:taskId/engagements/:engagementId/manual-audit', async (req, res) => {
   try {
-    const result = await manualAuditService.submitAudit(req.user.id, req.params.id);
+    const result = await manualAuditService.submitEngagementAudit(req.user.id, req.params.engagementId);
     if (result.duplicate) {
       return res.json({ message: result.message, status: result.status });
     }
@@ -501,7 +458,6 @@ router.post('/tasks/:id/manual-audit', async (req, res) => {
     res.status(500).json({ error: 'Failed to submit manual audit.' });
   }
 });
-
 // 6. Leaderboard - Ranked by points
 router.get('/leaderboard', async (req, res) => {
   try {

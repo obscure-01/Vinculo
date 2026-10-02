@@ -2,107 +2,103 @@ const db = require('../db');
 
 class ManualAuditService {
   /**
-   * Submits a manual audit request for a given task and student.
-   * Performs all business validations and identity snapshotting.
+   * Submits a manual audit request for a specific engagement.
+   * PHASE 1: Engagement-scoped lifecycle.
+   * PHASE 2: Transaction boundaries and deterministic rules.
    */
-  async submitAudit(userId, taskId) {
+  async submitEngagementAudit(userId, engagementId) {
     const client = await db.pool.connect();
     try {
       await client.query('BEGIN');
       
-      const taskCheck = await client.query('SELECT * FROM tasks WHERE id = $1 AND status != \'CANCELLED\' FOR SHARE', [taskId]);
-      if (taskCheck.rows.length === 0) {
-        throw { status: 404, message: 'Task not found or cancelled.' };
-      }
-      const task = taskCheck.rows[0];
+      const engCheck = await client.query(`
+        SELECT te.*, t.platform, t.expiry_date, t.status as task_status
+        FROM task_engagements te
+        JOIN tasks t ON te.task_id = t.id
+        WHERE te.id = $1 AND te.verification_type = 'MANUAL'
+        FOR SHARE
+      `, [engagementId]);
       
-      if (new Date(task.expiry_date) < new Date()) {
+      if (engCheck.rows.length === 0) {
+        throw { status: 404, message: 'Engagement not found or is not manual.' };
+      }
+      const eng = engCheck.rows[0];
+      
+      if (eng.task_status === 'CANCELLED') {
+         throw { status: 400, message: 'Task is cancelled.' };
+      }
+      
+      if (new Date(eng.expiry_date) < new Date()) {
         throw { status: 400, message: 'This task has expired.' };
       }
       
-
-      const engagementsCheck = await client.query('SELECT id, engagement_type FROM task_engagements WHERE task_id = $1 AND verification_type = \'MANUAL\'', [taskId]);
-      if (engagementsCheck.rows.length === 0) {
-         throw { status: 400, message: 'Task has no manual engagements configured.' };
-      }
-      
       const userCheck = await client.query('SELECT instagram_username, facebook_display_name, facebook_profile FROM users WHERE id = $1', [userId]);
-      if (userCheck.rows.length === 0) {
-        throw { status: 404, message: 'Student not found.' };
-      }
-      
+      if (userCheck.rows.length === 0) throw { status: 404, message: 'Student not found.' };
       const user = userCheck.rows[0];
-      let platformIdentifier = null;
       
-      if (task.platform === 'Instagram') {
-        platformIdentifier = user.instagram_username;
-      } else if (task.platform === 'Facebook') {
-        platformIdentifier = user.facebook_display_name || user.facebook_profile;
-      }
+      let platformIdentifier = null;
+      if (eng.platform === 'Instagram') platformIdentifier = user.instagram_username;
+      else if (eng.platform === 'Facebook') platformIdentifier = user.facebook_display_name || user.facebook_profile;
 
       if (!platformIdentifier || platformIdentifier.trim() === '') {
-        throw { status: 400, message: `Your ${task.platform} profile identifier is missing. Please update your profile settings first.` };
+        throw { status: 400, message: `Your ${eng.platform} profile identifier is missing. Please update your profile settings first.` };
       }
 
-      let firstAuditRec = null;
+      // 1. Ensure Student Activity exists. Use ON CONFLICT DO UPDATE so it's safely claimed.
+      const saResult = await client.query(`
+        INSERT INTO student_activities (user_id, task_engagement_id, status, created_at)
+        VALUES ($1, $2, 'Submitted', CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, task_engagement_id) DO UPDATE SET status = 'Submitted'
+        RETURNING id
+      `, [userId, engagementId]);
+      const saId = saResult.rows[0].id;
 
-      for (const eng of engagementsCheck.rows) {
-         const snapResult = await client.query(`
-           INSERT INTO identity_snapshots (student_id, platform, platform_identifier, captured_at)
-           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-           RETURNING id
-         `, [userId, task.platform, platformIdentifier]);
-         const snapshotId = snapResult.rows[0].id;
-
-         const saResult = await client.query(`
-           INSERT INTO student_activities (user_id, task_engagement_id, status, created_at)
-           VALUES ($1, $2, 'Submitted', CURRENT_TIMESTAMP)
-           ON CONFLICT (user_id, task_engagement_id) DO UPDATE SET status = 'Submitted'
-           RETURNING id
-         `, [userId, eng.id]);
-         
-         const saId = saResult.rows[0].id;
-
-         const existingAudit = await client.query(
-           'SELECT id, status FROM manual_audits WHERE student_activity_id = $1',
-           [saId]
-         );
-         
-         let isResubmission = false;
-         if (existingAudit.rows.length > 0) {
-           const currentStatus = existingAudit.rows[0].status;
-           if (currentStatus !== 'REJECTED') {
-             throw { status: 400, message: `Submission cannot be made because current status is ${currentStatus}.` };
-           }
-           isResubmission = true;
-         }
-
-         const insertQuery = `
-           INSERT INTO manual_audits (student_activity_id, identity_snapshot_id, status, submitted_at)
-           VALUES ($1, $2, 'PENDING', CURRENT_TIMESTAMP)
-           ON CONFLICT (student_activity_id) DO UPDATE SET 
-             status = 'PENDING', 
-             identity_snapshot_id = EXCLUDED.identity_snapshot_id, 
-             submitted_at = CURRENT_TIMESTAMP
-           RETURNING *
-         `;
-         const maResult = await client.query(insertQuery, [saId, snapshotId]);
-         const auditId = maResult.rows[0].id;
-         
-         await client.query(
-           `INSERT INTO manual_audit_history (audit_id, previous_status, new_status, reason, notes)
-            VALUES ($1, $2, $3, $4, $5)`,
-           [auditId, isResubmission ? 'REJECTED' : null, 'PENDING', 'Student Submission', null]
-         );
-         
-         if (!firstAuditRec) firstAuditRec = maResult.rows[0];
+      // 2. Lock Manual Audit
+      const existingAudit = await client.query(
+        'SELECT id, status FROM manual_audits WHERE student_activity_id = $1 FOR UPDATE',
+        [saId]
+      );
+      
+      let isResubmission = false;
+      if (existingAudit.rows.length > 0) {
+        const currentStatus = existingAudit.rows[0].status;
+        if (currentStatus !== 'REJECTED' && currentStatus !== 'CANCELLED') {
+          throw { status: 409, message: `Submission cannot be made because current status is ${currentStatus}.` };
+        }
+        isResubmission = true;
       }
 
+      const snapResult = await client.query(`
+        INSERT INTO identity_snapshots (student_id, platform, platform_identifier, captured_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        RETURNING id
+      `, [userId, eng.platform, platformIdentifier]);
+      const snapshotId = snapResult.rows[0].id;
+
+      // 3. Upsert Manual Audit
+      const maResult = await client.query(`
+        INSERT INTO manual_audits (student_activity_id, identity_snapshot_id, status, submitted_at)
+        VALUES ($1, $2, 'PENDING', CURRENT_TIMESTAMP)
+        ON CONFLICT (student_activity_id) DO UPDATE SET 
+          status = 'PENDING', 
+          identity_snapshot_id = EXCLUDED.identity_snapshot_id, 
+          submitted_at = CURRENT_TIMESTAMP
+        RETURNING *
+      `, [saId, snapshotId]);
+      const auditId = maResult.rows[0].id;
+      
+      // 4. Write History inside same transaction
+      await client.query(
+        `INSERT INTO manual_audit_history (audit_id, previous_status, new_status, reason, notes)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [auditId, isResubmission ? existingAudit.rows[0].status : null, 'PENDING', 'Student Submission', null]
+      );
+      
       await client.query('COMMIT');
       return {
         duplicate: false,
         message: 'Manual audit request submitted successfully. It is now PENDING review.',
-        audit: firstAuditRec
+        audit: maResult.rows[0]
       };
     } catch (err) {
       await client.query('ROLLBACK');
@@ -111,6 +107,84 @@ class ManualAuditService {
     } finally {
       client.release();
     }
+  }
+
+  // Backwards compatibility wrapper for Phase 3 legacy resolution (Option B)
+  async submitAudit(userId, taskId) {
+    const engagementsCheck = await db.query('SELECT id FROM task_engagements WHERE task_id = $1 AND verification_type = \'MANUAL\'', [taskId]);
+    if (engagementsCheck.rows.length === 0) {
+        throw { status: 400, message: 'Task has no manual engagements configured.' };
+    }
+    let lastResult = null;
+    for (const eng of engagementsCheck.rows) {
+        lastResult = await this.submitEngagementAudit(userId, eng.id);
+    }
+    return lastResult;
+  }
+
+  // PHASE 2: Safe Engagement-scoped withdrawal
+  async withdrawEngagementAudit(userId, engagementId) {
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      const saResult = await client.query(`
+        SELECT id FROM student_activities WHERE user_id = $1 AND task_engagement_id = $2 FOR SHARE
+      `, [userId, engagementId]);
+      
+      if (saResult.rows.length === 0) {
+        throw { status: 404, message: 'Activity not found.' };
+      }
+      const saId = saResult.rows[0].id;
+      
+      const maResult = await client.query(`
+        SELECT id, status FROM manual_audits WHERE student_activity_id = $1 FOR UPDATE
+      `, [saId]);
+      
+      if (maResult.rows.length === 0) {
+        throw { status: 404, message: 'Audit not found.' };
+      }
+      
+      const audit = maResult.rows[0];
+      if (audit.status !== 'PENDING') {
+         throw { status: 409, message: `Cannot withdraw audit in status ${audit.status}` };
+      }
+      
+      await client.query(`UPDATE manual_audits SET status = 'CANCELLED' WHERE id = $1`, [audit.id]);
+      await client.query(`UPDATE student_activities SET status = 'Cancelled' WHERE id = $1`, [saId]);
+      
+      await client.query(`
+         INSERT INTO manual_audit_history (audit_id, previous_status, new_status, reason, notes)
+         VALUES ($1, $2, $3, $4, $5)
+      `, [audit.id, 'PENDING', 'CANCELLED', 'Student Withdrew', null]);
+      
+      await client.query('COMMIT');
+      return { message: 'Audit withdrawn successfully.' };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err.status) throw err;
+      throw { status: 500, message: 'Failed to withdraw audit.', error: err.message };
+    } finally {
+      client.release();
+    }
+  }
+
+  // Legacy Withdraw
+  async withdrawAudit(userId, taskId) {
+    const engagementsCheck = await db.query('SELECT id FROM task_engagements WHERE task_id = $1 AND verification_type = \'MANUAL\'', [taskId]);
+    let successCount = 0;
+    for (const eng of engagementsCheck.rows) {
+        try {
+            await this.withdrawEngagementAudit(userId, eng.id);
+            successCount++;
+        } catch (err) {
+           if (err.status !== 404 && err.status !== 409) throw err;
+        }
+    }
+    if (successCount === 0) {
+       throw { status: 409, message: 'Cannot withdraw task audit or already processed.' };
+    }
+    return { message: 'Manual audit request withdrawn.' };
   }
 
   async getOverviewStats() {
@@ -181,28 +255,61 @@ class ManualAuditService {
     };
   }
 
-  async generateAuditBatch(percentage) {
-    const pendingResult = await db.query("SELECT id FROM manual_audits WHERE status = 'PENDING' AND is_selected_for_audit = FALSE");
-    const pendingIds = pendingResult.rows.map(r => r.id);
-    
-    if (pendingIds.length === 0) {
-      return { message: 'No pending unselected audits available to sample.', count: 0 };
+  // PHASE 5: Batch Generation atomic
+  async generateAuditBatch(options = {}) {
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const countQuery = await client.query("SELECT COUNT(*) FROM manual_audits WHERE status = 'PENDING' AND is_selected_for_audit = FALSE");
+      const totalPending = parseInt(countQuery.rows[0].count, 10);
+      if (totalPending === 0) {
+        await client.query('ROLLBACK');
+        return { message: 'No pending unselected audits available to sample.', count: 0 };
+      }
+      
+      
+      let sampleSize = 0;
+      if (options.count) {
+        sampleSize = parseInt(options.count, 10);
+      } else {
+        const percentage = options.percentage || 25;
+        sampleSize = Math.ceil(totalPending * (percentage / 100));
+      }
+      if (sampleSize < 1) sampleSize = 1;
+
+
+      // Conditional claiming via RETURNING
+      const updateResult = await client.query(`
+        UPDATE manual_audits 
+        SET is_selected_for_audit = TRUE, status = 'UNDER_REVIEW' 
+        WHERE id IN (
+          SELECT id FROM manual_audits 
+          WHERE status = 'PENDING' AND is_selected_for_audit = FALSE 
+          ORDER BY id ASC
+          LIMIT $1 
+          FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id
+      `, [sampleSize]);
+      
+      if (updateResult.rows.length > 0) {
+         const ids = updateResult.rows.map(r => r.id);
+         const values = ids.map((id, idx) => `($${idx * 5 + 1}, $${idx * 5 + 2}, $${idx * 5 + 3}, $${idx * 5 + 4}, $${idx * 5 + 5})`).join(', ');
+         const flatParams = ids.flatMap(id => [id, 'PENDING', 'UNDER_REVIEW', 'System Batch Generation', null]);
+         await client.query(`
+           INSERT INTO manual_audit_history (audit_id, previous_status, new_status, reason, notes)
+           VALUES ${values}
+         `, flatParams);
+      }
+      
+      await client.query('COMMIT');
+      return { message: `Successfully sampled ${updateResult.rowCount} audits.`, count: updateResult.rowCount };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw { status: 500, error: 'Failed to generate batch.', originalError: err.message };
+    } finally {
+      client.release();
     }
-    
-    let sampleSize = Math.ceil(pendingIds.length * (percentage / 100));
-    if (sampleSize < 1) sampleSize = 1;
-    
-    // Shuffle and pick
-    for (let i = pendingIds.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pendingIds[i], pendingIds[j]] = [pendingIds[j], pendingIds[i]];
-    }
-    
-    const selectedIds = pendingIds.slice(0, sampleSize);
-    
-    await db.query("UPDATE manual_audits SET is_selected_for_audit = TRUE, status = 'UNDER_REVIEW' WHERE id = ANY($1)", [selectedIds]);
-    
-    return { message: `Successfully sampled ${sampleSize} audits.`, count: sampleSize };
   }
 
   _generateBusinessNote(task, user, engagementType, action, reason, adminName) {
@@ -221,6 +328,7 @@ class ManualAuditService {
     return note;
   }
 
+  // PHASE 4: Batch Review deterministic lock order
   async batchReviewAudits(auditIds, action, reason, notes, reviewerId, reviewerName) {
     if (!auditIds || auditIds.length === 0) {
       throw { status: 400, error: 'Empty batch request.', auditId: null };
@@ -233,12 +341,16 @@ class ManualAuditService {
       }
       processedInBatch.add(auditId);
     }
+    
+    // NORMALIZE -> DEDUPLICATE -> SORT
+    const sortedAuditIds = [...auditIds].sort((a, b) => a - b);
 
     const client = await db.pool.connect();
     try {
       await client.query('BEGIN');
 
-      for (const auditId of auditIds) {
+      // LOCK -> RE-READ -> VALIDATE ALL -> MUTATE -> HISTORY -> POINTS -> COMMIT
+      for (const auditId of sortedAuditIds) {
         const auditResult = await client.query(
           `SELECT ma.*, sa.user_id, sa.task_engagement_id, sa.status as activity_status,
                   te.points, te.engagement_type, te.task_id, t.title as task_title, t.platform as task_platform
