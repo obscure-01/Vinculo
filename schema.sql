@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS task_engagements (
   CONSTRAINT unique_task_engagement UNIQUE (task_id, engagement_type)
 );
 
-CREATE INDEX idx_task_engagements_task ON task_engagements(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_engagements_task ON task_engagements(task_id);
 
 -- Identity Snapshots Table (Immutable Snapshot)
 CREATE TABLE IF NOT EXISTS identity_snapshots (
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS identity_snapshots (
   captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_identity_snapshots_student ON identity_snapshots(student_id);
+CREATE INDEX IF NOT EXISTS idx_identity_snapshots_student ON identity_snapshots(student_id);
 
 -- Student Activities Table (Student Progress for ONE Engagement)
 CREATE TABLE IF NOT EXISTS student_activities (
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS student_activities (
   CONSTRAINT unique_student_activity UNIQUE (user_id, task_engagement_id)
 );
 
-CREATE INDEX idx_student_activities_user ON student_activities(user_id);
+CREATE INDEX IF NOT EXISTS idx_student_activities_user ON student_activities(user_id);
 
 -- Manual Audits Table (Verification Workflow)
 CREATE TABLE IF NOT EXISTS manual_audits (
@@ -80,9 +80,9 @@ CREATE TABLE IF NOT EXISTS manual_audits (
   CONSTRAINT unique_manual_audit_activity UNIQUE (student_activity_id)
 );
 
-CREATE INDEX idx_manual_audits_activity ON manual_audits(student_activity_id);
-CREATE INDEX idx_manual_audits_status ON manual_audits(status);
-CREATE INDEX idx_manual_audits_submitted ON manual_audits(submitted_at);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_activity ON manual_audits(student_activity_id);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_status ON manual_audits(status);
+CREATE INDEX IF NOT EXISTS idx_manual_audits_submitted ON manual_audits(submitted_at);
 
 -- Review Logs Table (Immutable Review Metadata)
 CREATE TABLE IF NOT EXISTS review_logs (

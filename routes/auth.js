@@ -3,8 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
-
-const JWT_SECRET = process.env.JWT_SECRET || 'engagehub_super_secret_key_123_!@#';
+const { jwtSecret } = require('../config');
 
 // User Login (Admin & Student)
 router.post('/login', async (req, res) => {
@@ -31,7 +30,7 @@ router.post('/login', async (req, res) => {
     // Sign JWT
     const token = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
-      JWT_SECRET,
+      jwtSecret,
       { expiresIn: '24h' }
     );
 
