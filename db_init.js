@@ -52,105 +52,21 @@ async function initializeDatabase() {
   }
 
 async function isDatabaseEmpty(client) {
-  try {
-    // Check if the users table exists in the public schema
-    const tableCheck = await client.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-          AND table_name = 'users'
-      );
-    `);
-    
-    if (!tableCheck.rows[0].exists) {
-      return true;
-    }
+  for (const tableName of ['users', 'tasks', 'task_activity']) {
+    const tableCheck = await client.query(
+      'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)',
+      ['public', tableName]
+    );
+    if (!tableCheck.rows[0].exists) continue;
 
-    // Check if users table is empty
-    const countCheck = await client.query('SELECT COUNT(*)::int FROM users');
-    return countCheck.rows[0].count === 0;
-  } catch (err) {
-    return true;
+    const countCheck = await client.query(`SELECT COUNT(*)::int AS count FROM ${tableName}`);
+    if (countCheck.rows[0].count > 0) return false;
   }
+  return true;
 }
 
 async function hasProductionData(client) {
-  if (await isDatabaseEmpty(client)) {
-    return false;
-  }
-
-  // Check if there are users with emails not in the default seed emails
-  const seedEmails = [
-    'admin@engagehub.edu',
-    'alex@engagehub.edu',
-    'aman@engagehub.edu',
-    'priya@engagehub.edu',
-    'rahul@engagehub.edu',
-    'sneha@engagehub.edu',
-    'ram@engagehub.edu'
-  ];
-
-  const nonSeedUsers = await client.query(
-    'SELECT COUNT(*)::int FROM users WHERE email NOT IN ($1, $2, $3, $4, $5, $6, $7)',
-    seedEmails
-  );
-  if (nonSeedUsers.rows[0].count > 0) {
-    return true; // Found custom registered student or other user
-  }
-
-  // Check if a seed user has been deleted
-  const totalUsers = await client.query('SELECT COUNT(*)::int FROM users');
-  if (totalUsers.rows[0].count < seedEmails.length) {
-    return true; // A student was deleted
-  }
-
-  // Check if any seed user has points different from their initial seed points
-  const seedPoints = {
-    'admin@engagehub.edu': 0,
-    'alex@engagehub.edu': 120,
-    'aman@engagehub.edu': 210,
-    'priya@engagehub.edu': 180,
-    'rahul@engagehub.edu': 170,
-    'sneha@engagehub.edu': 150,
-    'ram@engagehub.edu': 15
-  };
-  const users = await client.query('SELECT email, points FROM users');
-  for (const row of users.rows) {
-    if (seedPoints[row.email] !== undefined && row.points !== seedPoints[row.email]) {
-      return true; // Points changed (activity performed)
-    }
-  }
-
-  // Check if there are tasks not in the seed tasks
-  const seedTasks = [
-    'AI Workshop Reel',
-    'Tech Fest Highlights Reel',
-    'Placement Preparation Video',
-    'Innovation Showcase Video',
-    'Career Fair Announcement',
-    'College Hackathon Promo'
-  ];
-  const nonSeedTasks = await client.query(
-    'SELECT COUNT(*)::int FROM tasks WHERE title NOT IN ($1, $2, $3, $4, $5, $6)',
-    seedTasks
-  );
-  if (nonSeedTasks.rows[0].count > 0) {
-    return true; // Custom tasks created
-  }
-
-  // Check if a seed task has been deleted
-  const totalTasks = await client.query('SELECT COUNT(*)::int FROM tasks');
-  if (totalTasks.rows[0].count < seedTasks.length) {
-    return true; // A task was deleted
-  }
-
-  // Check if there are task activities other than the seed ones
-  const totalActivity = await client.query('SELECT COUNT(*)::int FROM task_activity');
-  if (totalActivity.rows[0].count !== 9) {
-    return true; // Activity count changed
-  }
-
-  return false;
+  return !(await isDatabaseEmpty(client));
 }
 
 // Connect to the target database and execute migrations
@@ -158,22 +74,32 @@ async function hasProductionData(client) {
   const targetPool = new Pool({ connectionString });
   try {
     const client = await targetPool.connect();
+
+    console.log('Connected successfully. Applying safe schema updates...');
+    const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    await client.query(schemaSql);
+    await client.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS points INTEGER NOT NULL DEFAULT 10');
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'tasks'::regclass AND conname = 'tasks_points_range_check'
+        ) THEN
+          ALTER TABLE tasks ADD CONSTRAINT tasks_points_range_check CHECK (points BETWEEN 0 AND 10000);
+        END IF;
+      END $$;
+    `);
     
     // Check if the database contains production data to protect it
     const hasProdData = await hasProductionData(client);
     if (hasProdData) {
-      console.log('⚠️  Database contains existing production data (custom students, tasks, or modified points).');
-      console.log('Skipping database re-initialization to prevent overwriting/data loss.');
+      console.log('Database already contains user, task, or activity data. Skipping sample seed data.');
       client.release();
       await targetPool.end();
       process.exit(0);
     }
 
-    console.log('Connected successfully. Setting up tables...');
-    
-    // Read and run schema.sql
-    const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-    await client.query(schemaSql);
     console.log('Database tables initialized.');
 
     // Read and run seed.sql

@@ -28,6 +28,35 @@ function checkRateLimit(userId, taskId) {
   return true;
 }
 
+async function awardCommentPoints(userId, taskId, status) {
+  return db.withTransaction(async (client) => {
+    const activityResult = await client.query(`
+      UPDATE task_activity
+      SET comment_status = $3,
+          comment_verified_at = CURRENT_TIMESTAMP,
+          comment_points_awarded = 5
+      WHERE user_id = $1
+        AND task_id = $2
+        AND status = 'COMPLETED'
+        AND COALESCE(comment_points_awarded, 0) = 0
+        AND comment_status NOT IN ('Comment Detected', 'Comment Verified', 'Verification Successful')
+      RETURNING id
+    `, [userId, taskId, status]);
+
+    if (activityResult.rowCount !== 1) return false;
+
+    const userResult = await client.query(
+      'UPDATE users SET points = points + 5 WHERE id = $1 RETURNING id',
+      [userId]
+    );
+    if (userResult.rowCount !== 1) {
+      throw new Error('Student record missing while awarding comment points.');
+    }
+
+    return true;
+  });
+}
+
 // Facebook Post ID Extraction
 function extractFacebookPostId(url) {
   try {
@@ -114,6 +143,7 @@ router.get('/tasks', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
+        t.points,
         t.expiry_date,
         COALESCE(ta.status, 'PENDING') as status,
         ta.opened_at
@@ -142,6 +172,7 @@ router.get('/tasks/completed', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
+        t.points,
         ta.completed_at,
         ta.time_spent,
         ta.comment_status,
@@ -182,9 +213,14 @@ router.post('/tasks/:id/open', async (req, res) => {
       VALUES ($1, $2, 'OPENED', CURRENT_TIMESTAMP)
       ON CONFLICT (user_id, task_id) 
       DO UPDATE SET status = 'OPENED', opened_at = CURRENT_TIMESTAMP
+      WHERE task_activity.status <> 'COMPLETED'
       RETURNING *
     `;
     const result = await db.query(upsertQuery, [userId, taskId]);
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'This task has already been completed.' });
+    }
 
     res.json({
       message: 'Task status updated to OPENED.',
@@ -204,77 +240,64 @@ router.post('/tasks/:id/complete', async (req, res) => {
   const taskId = req.params.id;
 
   try {
-    // Check if task exists and has not expired
-    const taskCheck = await db.query('SELECT expiry_date, platform FROM tasks WHERE id = $1', [taskId]);
-    if (taskCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-    if (new Date(taskCheck.rows[0].expiry_date) < new Date()) {
-      return res.status(400).json({ error: 'This task has expired and cannot be completed.' });
-    }
+    const outcome = await db.withTransaction(async (client) => {
+      const taskExists = await client.query('SELECT id FROM tasks WHERE id = $1 FOR KEY SHARE', [taskId]);
+      if (taskExists.rowCount === 0) return { error: 'not_found' };
 
-    // Retrieve open activity
-    const activityResult = await db.query(
-      'SELECT * FROM task_activity WHERE user_id = $1 AND task_id = $2',
-      [userId, taskId]
-    );
+      const result = await client.query(`
+        SELECT ta.*, t.expiry_date, t.platform, t.points
+        FROM task_activity ta
+        JOIN tasks t ON t.id = ta.task_id
+        WHERE ta.user_id = $1 AND ta.task_id = $2
+        FOR UPDATE OF ta
+      `, [userId, taskId]);
 
-    if (activityResult.rows.length === 0) {
-      return res.status(400).json({ error: 'This task has not been opened yet.' });
-    }
+      if (result.rows.length === 0) return { error: 'not_opened' };
 
-    const activity = activityResult.rows[0];
+      const activity = result.rows[0];
+      if (new Date(activity.expiry_date) < new Date()) return { error: 'expired' };
+      if (activity.status === 'COMPLETED') return { error: 'completed' };
+      if (activity.status !== 'OPENED') return { error: 'invalid_status' };
 
-    if (activity.status === 'COMPLETED') {
-      return res.status(400).json({ error: 'This task has already been completed.' });
-    }
+      const elapsedSeconds = (Date.now() - new Date(activity.opened_at).getTime()) / 1000;
+      if (elapsedSeconds < 20) return { error: 'too_soon' };
 
-    if (activity.status !== 'OPENED') {
-      return res.status(400).json({ error: 'Task status is invalid. Please open the task first.' });
-    }
+      const timeSpent = Math.round(elapsedSeconds);
+      const commentStatus = activity.platform === 'YouTube' ? ", comment_status = 'Not Checked'" : '';
+      const updated = await client.query(`
+        UPDATE task_activity
+        SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP,
+            time_spent = $3${commentStatus}
+        WHERE user_id = $1 AND task_id = $2 AND status = 'OPENED'
+        RETURNING *
+      `, [userId, taskId, timeSpent]);
 
-    // Validation: Current Time - Open Time (minimum 20 seconds)
-    const openedTime = new Date(activity.opened_at).getTime();
-    const currentTime = Date.now();
-    const elapsedSeconds = (currentTime - openedTime) / 1000;
+      if (updated.rowCount !== 1) return { error: 'completed' };
 
-    if (elapsedSeconds < 20) {
-      return res.status(400).json({
-        error: 'Please spend at least 20 seconds engaging with the content before completing this task.'
-      });
-    }
+      const userUpdate = await client.query(
+        'UPDATE users SET points = points + $2 WHERE id = $1 RETURNING id',
+        [userId, activity.points]
+      );
+      if (userUpdate.rowCount !== 1) throw new Error('Student record missing while awarding task points.');
 
-    // Award 10 points to student and update activity
-    // Use transaction to ensure consistency
-    await db.query('BEGIN');
-
-    // Increment user points
-    await db.query('UPDATE users SET points = points + 10 WHERE id = $1', [userId]);
-
-    // Update activity status to COMPLETED
-    const timeSpent = Math.round(elapsedSeconds);
-    const platform = taskCheck.rows[0].platform;
-    const isYouTube = platform === 'YouTube';
-    const updateActivityQuery = isYouTube
-      ? `UPDATE task_activity
-         SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP, time_spent = $3, comment_status = 'Not Checked'
-         WHERE user_id = $1 AND task_id = $2
-         RETURNING *`
-      : `UPDATE task_activity
-         SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP, time_spent = $3
-         WHERE user_id = $1 AND task_id = $2
-         RETURNING *`;
-    const updatedActivity = await db.query(updateActivityQuery, [userId, taskId, timeSpent]);
-
-    await db.query('COMMIT');
-
-    res.json({
-      message: 'Task completed successfully! +10 Points awarded.',
-      activity: updatedActivity.rows[0]
+      return { activity: updated.rows[0], points: activity.points };
     });
 
+    if (outcome.error === 'not_found') return res.status(404).json({ error: 'Task not found.' });
+    if (outcome.error === 'not_opened') return res.status(400).json({ error: 'This task has not been opened yet.' });
+    if (outcome.error === 'expired') return res.status(400).json({ error: 'This task has expired and cannot be completed.' });
+    if (outcome.error === 'completed') return res.status(400).json({ error: 'This task has already been completed.' });
+    if (outcome.error === 'invalid_status') return res.status(400).json({ error: 'Task status is invalid. Please open the task first.' });
+    if (outcome.error === 'too_soon') {
+      return res.status(400).json({ error: 'Please spend at least 20 seconds engaging with the content before completing this task.' });
+    }
+
+    res.json({
+      message: `Task completed successfully! +${outcome.points} Points awarded.`,
+      activity: outcome.activity,
+      pointsAwarded: outcome.points
+    });
   } catch (error) {
-    if (db) await db.query('ROLLBACK');
     console.error('Error completing task:', error);
     res.status(500).json({ error: 'An error occurred during task completion.' });
   }
@@ -598,6 +621,19 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
     const platform = taskResult.rows[0].platform;
     const socialLink = taskResult.rows[0].social_link;
 
+    if (platform === 'Instagram') {
+      const status = 'Platform Not Available';
+      await db.query(
+        'UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3',
+        [status, userId, taskId]
+      );
+      return res.status(501).json({
+        error: 'Instagram comment verification is not available. No bonus points were awarded.',
+        comment_status: status,
+        pointsAwarded: 0
+      });
+    }
+
     // 4. Fetch user details to get the relevant handle
     const userResult = await db.query(
       'SELECT name, instagram_username, youtube_handle, linkedin_profile, facebook_profile, facebook_display_name FROM users WHERE id = $1',
@@ -730,13 +766,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
            userMessage = 'A network error occurred while contacting YouTube API.';
         }
 
-        try {
-          await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
-        } catch (dbErr) {
-          global.lastDatabaseError = { message: dbErr.message, code: dbErr.code, detail: dbErr.detail };
-          global.lastDatabaseQuery = `UPDATE task_activity SET comment_status = '${status}' WHERE user_id = ${userId} AND task_id = ${taskId}`;
-          throw dbErr;
-        }
+        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
         
         logDiagnostic({ 
           ...diagBase, 
@@ -755,13 +785,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
       if (!comments || comments.length === 0) {
         const status = 'No Comments Available';
-        try {
-          await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
-        } catch (dbErr) {
-          global.lastDatabaseError = { message: dbErr.message, code: dbErr.code, detail: dbErr.detail };
-          global.lastDatabaseQuery = `UPDATE task_activity SET comment_status = '${status}' WHERE user_id = ${userId} AND task_id = ${taskId}`;
-          throw dbErr;
-        }
+        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
 
         logDiagnostic({ ...diagBase, verificationSource, retrievedCommentsCount: 0, status: status, reason: 'YouTube API returned an empty list of comments for this video' });
         return res.json({ 
@@ -798,16 +822,10 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
       if (commentFound) {
         const status = 'Comment Verified';
-        await db.query('BEGIN');
-        await db.query('UPDATE users SET points = points + 5 WHERE id = $1', [userId]);
-        await db.query(`
-          UPDATE task_activity 
-          SET comment_status = $1, 
-              comment_verified_at = CURRENT_TIMESTAMP, 
-              comment_points_awarded = 5 
-          WHERE user_id = $2 AND task_id = $3
-        `, [status, userId, taskId]);
-        await db.query('COMMIT');
+        const awarded = await awardCommentPoints(userId, taskId, status);
+        if (!awarded) {
+          return res.status(409).json({ error: 'Comment points have already been awarded for this task.' });
+        }
 
         logDiagnostic({ ...diagBase, verificationSource, matchResult: true, status: status, reason: `Successfully matched comment from ${matchedAuthor}` });
 
@@ -911,16 +929,10 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
       if (matchFound) {
         const status = 'Comment Verified';
-        await db.query('BEGIN');
-        await db.query('UPDATE users SET points = points + 5 WHERE id = $1', [userId]);
-        await db.query(`
-          UPDATE task_activity 
-          SET comment_status = $1, 
-              comment_verified_at = CURRENT_TIMESTAMP, 
-              comment_points_awarded = 5 
-          WHERE user_id = $2 AND task_id = $3
-        `, [status, userId, taskId]);
-        await db.query('COMMIT');
+        const awarded = await awardCommentPoints(userId, taskId, status);
+        if (!awarded) {
+          return res.status(409).json({ error: 'Comment points have already been awarded for this task.' });
+        }
         logDiagnostic({ ...diagBase, matchResult: true, status: status, reason: `Successfully matched comment from ${matchedAuthor}` });
         return res.json({ message: 'Comment successfully verified! +5 Points awarded.', comment_status: status });
       } else {
@@ -930,55 +942,14 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
         return res.status(404).json({ message: 'No matching comment found for your exact Facebook Display Name.', comment_status: status });
       }
 
-    } else if (platform === 'Instagram') {
-      await db.query('BEGIN');
-      await db.query('UPDATE users SET points = points + 5 WHERE id = $1', [userId]);
-      await db.query(
-        "UPDATE task_activity SET comment_status = 'Comment Detected', comment_verified_at = CURRENT_TIMESTAMP, comment_points_awarded = 5 WHERE user_id = $1 AND task_id = $2",
-        [userId, taskId]
-      );
-      await db.query('COMMIT');
-
-      return res.json({ message: 'Comment successfully verified! +5 Points awarded.', comment_status: 'Comment Detected' });
     } else {
       await db.query("UPDATE task_activity SET comment_status = 'Comment Not Verified' WHERE user_id = $1 AND task_id = $2", [userId, taskId]);
       return res.json({ message: `Automatic comment verification is not available for ${platform}.`, comment_status: 'Comment Not Verified' });
     }
 
   } catch (error) {
-    if (db) await db.query('ROLLBACK');
-    console.error('\n--- DATABASE ERROR IN VERIFICATION ---');
-    console.error('Full Error Message:', error.message);
-    console.error('Error Code:', error.code);
-    console.error('Stack Trace:', error.stack);
-    
-    global.lastDatabaseError = global.lastDatabaseError || { message: error.message, code: error.code };
-    
-    res.status(500).json({ 
-      error: 'Failed to verify comment. Database error.',
-      pgError: error.message,
-      pgCode: error.code,
-      failingQuery: global.lastDatabaseQuery || 'See server logs for query detail'
-    });
-  }
-});
-
-router.get('/system/verification-debug', async (req, res) => {
-  try {
-    const result = await db.query('SELECT status FROM verification_audit_logs ORDER BY timestamp DESC LIMIT 1');
-    res.json({
-      verificationStage: result.rows.length > 0 ? result.rows[0].status : 'None',
-      databaseStatus: global.lastDatabaseError ? 'Error' : 'OK',
-      lastVerificationError: global.lastDatabaseError,
-      lastFailedQuery: global.lastDatabaseQuery
-    });
-  } catch (err) {
-    res.json({
-      verificationStage: 'Error fetching logs',
-      databaseStatus: 'Error',
-      lastVerificationError: err.message,
-      lastFailedQuery: null
-    });
+    console.error('Comment verification failed:', error);
+    res.status(500).json({ error: 'Failed to verify comment. Please try again later.' });
   }
 });
 

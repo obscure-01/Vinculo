@@ -96,38 +96,23 @@ const fs = require('fs');
 
 async function checkAndInitializeDatabase() {
   try {
-    // Check if the users table exists in public schema
+    // Seed only a new database; an empty users table can still belong to an existing dataset.
     const tableCheck = await pool.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-          AND table_name = 'users'
-      );
+      SELECT COUNT(*)::int AS count
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name IN ('users', 'tasks', 'task_activity');
     `);
-    
-    let isEmpty = !tableCheck.rows[0].exists;
-    
-    if (!isEmpty) {
-      const countCheck = await pool.query('SELECT COUNT(*)::int FROM users');
-      if (countCheck.rows[0].count === 0) {
-        isEmpty = true;
-      }
-    }
+    const isUninitialized = tableCheck.rows[0].count === 0;
 
-    if (isEmpty) {
-      console.log('Database is empty. Initializing schema and seed data...');
-      
-      // Read and run schema.sql
-      const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-      await pool.query(schemaSql);
-      console.log('Database tables initialized.');
+    const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    await pool.query(schemaSql);
+    console.log(isUninitialized ? 'Database tables initialized.' : 'Database schema checked without dropping existing data.');
 
-      // Read and run seed.sql
+    if (isUninitialized) {
       const seedSql = fs.readFileSync(path.join(__dirname, 'seed.sql'), 'utf8');
       await pool.query(seedSql);
       console.log('Sample data seeded successfully.');
-    } else {
-      console.log('Database already initialized. Connecting and loading records...');
     }
 
     // Ensure the CHECK constraint is updated to support the new comment status values
@@ -135,6 +120,18 @@ async function checkAndInitializeDatabase() {
     
     // Auto-migrate new columns and tables for V4 update if they don't exist
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS facebook_display_name VARCHAR(255) DEFAULT NULL;`);
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS points INTEGER NOT NULL DEFAULT 10;`);
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'tasks'::regclass AND conname = 'tasks_points_range_check'
+        ) THEN
+          ALTER TABLE tasks ADD CONSTRAINT tasks_points_range_check CHECK (points BETWEEN 0 AND 10000);
+        END IF;
+      END $$;
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS facebook_api_usage (
         id SERIAL PRIMARY KEY,
@@ -146,6 +143,14 @@ async function checkAndInitializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await pool.query(`
+      ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE task_activity ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE verification_audit_logs ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE youtube_api_usage ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE facebook_api_usage ENABLE ROW LEVEL SECURITY;
+    `);
     
     await pool.query(`
       ALTER TABLE task_activity DROP CONSTRAINT IF EXISTS task_activity_comment_status_check;
@@ -156,6 +161,7 @@ async function checkAndInitializeDatabase() {
     console.log('Database constraints verified.');
   } catch (error) {
     console.error('Error during database startup initialization check:', error);
+    throw error;
   }
 }
 
@@ -186,4 +192,11 @@ checkAndInitializeDatabase().then(() => {
     
     console.log(`=========================================`);
   });
+}).catch(async (error) => {
+  console.error('Server startup failed; refusing to listen with an uninitialized database:', error);
+  try {
+    await pool.end();
+  } finally {
+    process.exitCode = 1;
+  }
 });

@@ -1,12 +1,7 @@
 -- EngageHub Database Schema
 
--- Drop tables if they exist (for easy re-initialization)
-DROP TABLE IF EXISTS task_activity CASCADE;
-DROP TABLE IF EXISTS tasks CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
-
 -- Users Table
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   email VARCHAR(255) UNIQUE NOT NULL,
@@ -22,18 +17,19 @@ CREATE TABLE users (
 );
 
 -- Tasks Table
-CREATE TABLE tasks (
+CREATE TABLE IF NOT EXISTS tasks (
   id SERIAL PRIMARY KEY,
   title VARCHAR(255) NOT NULL,
   platform VARCHAR(50) NOT NULL CHECK (platform IN ('Instagram', 'YouTube', 'LinkedIn', 'Facebook')),
   social_link TEXT NOT NULL,
+  points INTEGER NOT NULL DEFAULT 10 CONSTRAINT tasks_points_range_check CHECK (points BETWEEN 0 AND 10000),
   duration_days INTEGER NOT NULL DEFAULT 7,
   expiry_date TIMESTAMP NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Task Activity Table
-CREATE TABLE task_activity (
+CREATE TABLE IF NOT EXISTS task_activity (
   id SERIAL PRIMARY KEY,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
@@ -48,7 +44,7 @@ CREATE TABLE task_activity (
 );
 
 -- Verification Audit Logs Table
-CREATE TABLE verification_audit_logs (
+CREATE TABLE IF NOT EXISTS verification_audit_logs (
   id SERIAL PRIMARY KEY,
   timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
@@ -84,3 +80,12 @@ CREATE TABLE IF NOT EXISTS facebook_api_usage (
   error_message TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Keep the public schema inaccessible to Supabase client roles.
+-- Vinculo accesses PostgreSQL through its server-side database connection.
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE task_activity ENABLE ROW LEVEL SECURITY;
+ALTER TABLE verification_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE youtube_api_usage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE facebook_api_usage ENABLE ROW LEVEL SECURITY;
