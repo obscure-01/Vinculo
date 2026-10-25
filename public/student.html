@@ -113,9 +113,9 @@
                 <span class="material-symbols-outlined">task</span>
                 Pending Tasks
             </button>
-            <button id="nav-completed" class="nav-item w-full flex items-center gap-3 px-6 py-4 text-secondary-fixed-dim font-normal font-headline text-body-sm hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
-                <span class="material-symbols-outlined">check_circle</span>
-                Completed Tasks
+            <button id="nav-task-progress" class="nav-item w-full flex items-center gap-3 px-6 py-4 text-secondary-fixed-dim font-normal font-headline text-body-sm hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
+                <span class="material-symbols-outlined">assignment_turned_in</span>
+                Task Progress
             </button>
             <button id="nav-leaderboard" class="nav-item w-full flex items-center gap-3 px-6 py-4 text-secondary-fixed-dim font-normal font-headline text-body-sm hover:bg-on-secondary-container hover:text-inverse-on-surface transition-colors cursor-pointer transition-all duration-150 text-left">
                 <span class="material-symbols-outlined">leaderboard</span>
@@ -180,9 +180,9 @@
                         </button>
                     </li>
                     <li>
-                        <button id="mobile-nav-completed" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
-                            <span class="material-symbols-outlined">check_circle</span>
-                            Completed Tasks
+                        <button id="mobile-nav-task-progress" class="mobile-nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT text-secondary-fixed-dim font-normal hover:bg-on-secondary-container transition-colors text-left">
+                            <span class="material-symbols-outlined">assignment_turned_in</span>
+                            Task Progress
                         </button>
                     </li>
                     <li>
@@ -307,13 +307,13 @@
                     </div>
                 </div>
 
-                <!-- VIEW 3: COMPLETED TASKS -->
-                <div id="view-completed-section" class="space-y-6 hidden">
+                <!-- VIEW 3: TASK PROGRESS -->
+                <div id="view-task-progress-section" class="space-y-6 hidden">
                     <div class="border-b border-outline-variant pb-2">
-                        <h3 class="text-2xl font-semibold text-on-surface font-headline">Completed Tasks</h3>
-                        <p class="text-sm text-on-surface-variant mt-1">Your past participation achievements.</p>
+                        <h3 class="text-2xl font-semibold text-on-surface font-headline">Task Progress</h3>
+                        <p class="text-sm text-on-surface-variant mt-1">Track the status of your submitted tasks.</p>
                     </div>
-                    <div id="completed-tasks-list" class="grid gap-4">
+                    <div id="task-progress-list" class="grid gap-4">
                         <!-- Dynamically filled -->
                     </div>
                 </div>
@@ -444,8 +444,59 @@
         </main>
     </div>
 
+    <!-- Manual Audit Submission Modal -->
+    <div id="manual-audit-modal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-on-surface/40 backdrop-blur-sm" id="manual-audit-overlay"></div>
+        <div class="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+            <div class="bg-surface w-full max-w-md rounded-xl shadow-2xl pointer-events-auto border border-outline-variant flex flex-col max-h-[90vh]">
+                <div class="p-5 border-b border-outline-variant flex items-center justify-between shrink-0">
+                    <h3 class="text-xl font-bold text-on-surface">Submit Manual Verification</h3>
+                    <button id="close-manual-audit-btn" class="text-on-surface-variant hover:text-on-surface p-1 rounded-full hover:bg-surface-container transition-colors">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                
+                <div class="p-6 overflow-y-auto">
+                    <div class="bg-error-container text-on-error-container p-4 rounded-lg mb-6 border border-[#ffb3b8]">
+                        <h4 class="font-bold mb-2 flex items-center gap-2">
+                            <span class="material-symbols-outlined text-[20px]">warning</span>
+                            Important Instructions
+                        </h4>
+                        <ul class="list-disc pl-5 space-y-1 text-sm">
+                            <li>Keep the engagement active until it has been reviewed.</li>
+                            <li>Do not remove likes.</li>
+                            <li>Do not deactivate accounts.</li>
+                            <li>Do not hide accounts.</li>
+                            <li>Approval depends on successful verification during manual review.</li>
+                        </ul>
+                    </div>
+
+                    <div class="space-y-4">
+                        <p class="text-sm text-on-surface-variant">
+                            By clicking submit, you declare that you have successfully completed the required <strong id="modal-engagement-type" class="text-on-surface"></strong> engagement on <strong id="modal-platform" class="text-on-surface"></strong> for the task:
+                        </p>
+                        <div class="p-3 bg-surface-container-low rounded border border-outline-variant text-sm font-semibold text-on-surface break-words" id="modal-task-title"></div>
+                    </div>
+                </div>
+
+                <div class="p-5 border-t border-outline-variant bg-surface-container-low rounded-b-xl flex justify-end gap-3 shrink-0">
+                    <button id="cancel-manual-audit-btn" class="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-surface-container rounded-lg transition-colors border border-transparent">
+                        Cancel
+                    </button>
+                    <button id="confirm-manual-audit-btn" class="px-4 py-2 text-sm font-semibold bg-primary text-on-primary hover:bg-on-primary-fixed-variant rounded-lg transition-colors shadow-sm flex items-center gap-2">
+                        Submit Audit Request
+                        <span class="material-symbols-outlined text-[18px]">send</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripting files -->
     <script src="js/auth.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/ui-components.js"></script>
+    <script src="js/view-manager.js"></script>
     <script src="js/student.js"></script>
 </body>
 </html>

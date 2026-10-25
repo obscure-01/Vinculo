@@ -16,6 +16,7 @@ global.facebookApiStatus = {
   lastAttempt: null,
   lastResponseStatus: null
 };
+global.MANUAL_AUDIT_PERCENTAGE = process.env.MANUAL_AUDIT_PERCENTAGE ? parseInt(process.env.MANUAL_AUDIT_PERCENTAGE, 10) : 25;
 const authRouter = require('./routes/auth');
 const adminRouter = require('./routes/admin');
 const studentRouter = require('./routes/student');
@@ -101,7 +102,7 @@ async function checkAndInitializeDatabase() {
       SELECT COUNT(*)::int AS count
       FROM information_schema.tables
       WHERE table_schema = 'public'
-        AND table_name IN ('users', 'tasks', 'task_activity');
+        AND table_name IN ('users', 'tasks');
     `);
     const isUninitialized = tableCheck.rows[0].count === 0;
 
@@ -115,12 +116,10 @@ async function checkAndInitializeDatabase() {
       console.log('Sample data seeded successfully.');
     }
 
-    // Ensure the CHECK constraint is updated to support the new comment status values
     console.log('Ensuring database constraints are up-to-date...');
-    
-    // Auto-migrate new columns and tables for V4 update if they don't exist
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS facebook_display_name VARCHAR(255) DEFAULT NULL;`);
     await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS points INTEGER NOT NULL DEFAULT 10;`);
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'CREATED';`);
     await pool.query(`
       DO $$
       BEGIN
@@ -133,30 +132,17 @@ async function checkAndInitializeDatabase() {
       END $$;
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS facebook_api_usage (
-        id SERIAL PRIMARY KEY,
-        request_type VARCHAR(255) NOT NULL,
-        quota_cost INTEGER NOT NULL DEFAULT 0,
-        status VARCHAR(50) NOT NULL,
-        response_code INTEGER,
-        error_message TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    await pool.query(`
       ALTER TABLE users ENABLE ROW LEVEL SECURITY;
       ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
-      ALTER TABLE task_activity ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE task_engagements ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE identity_snapshots ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE student_activities ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE manual_audits ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE review_logs ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE manual_audit_history ENABLE ROW LEVEL SECURITY;
       ALTER TABLE verification_audit_logs ENABLE ROW LEVEL SECURITY;
       ALTER TABLE youtube_api_usage ENABLE ROW LEVEL SECURITY;
       ALTER TABLE facebook_api_usage ENABLE ROW LEVEL SECURITY;
-    `);
-    
-    await pool.query(`
-      ALTER TABLE task_activity DROP CONSTRAINT IF EXISTS task_activity_comment_status_check;
-      ALTER TABLE task_activity ADD CONSTRAINT task_activity_comment_status_check CHECK (
-        comment_status IN ('Not Checked', 'Comment Verified', 'Comment Not Found', 'YouTube Account Not Available', 'Verification Error', 'Not Attempted', 'Comment Detected', 'Comment Not Verified', 'Platform Not Available', 'Invalid URL', 'Video ID Extraction Failed', 'Video Not Found', 'Handle Mismatch', 'Verification Successful', 'Student Handle Missing', 'Comments Not Accessible', 'No Comments Retrieved', 'Configuration Error', 'Comments Disabled', 'API Quota Exceeded', 'API Not Enabled', 'API Key Invalid', 'Network Error', 'No Comments Available', 'Facebook Account Not Available', 'Post ID Extraction Failed', 'Post Not Found', 'Facebook API Error', 'Rate Limited')
-      );
     `);
     console.log('Database constraints verified.');
   } catch (error) {
