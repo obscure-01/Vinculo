@@ -28,4 +28,14 @@ Create a Supabase backup or use a staging database before running it. The migrat
 - **Check JavaScript syntax:** run `node --check` on the changed server or route file, for example `node --check routes/student.js`.
 - **Check runtime dependencies:** run `npm audit --omit=dev --audit-level=moderate`.
 
-There is not yet an automated application test suite or a dedicated `npm test` command. The core points and transaction paths should receive PostgreSQL-backed integration tests before production deployment.
+## Integration tests
+
+The PostgreSQL-backed integration test uses a disposable local database and refuses non-local targets:
+
+```bash
+createdb vinculo_integration_test
+TEST_DATABASE_URL=postgresql:///vinculo_integration_test npm test
+dropdb vinculo_integration_test
+```
+
+The test covers route protection, authentication, task creation, task opening and completion, manual-audit submission, admin approval, points, and audit history. It does not use the production `DATABASE_URL`.

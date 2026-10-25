@@ -167,8 +167,10 @@ async function checkAndInitializeDatabase() {
   }
 }
 
-checkAndInitializeDatabase().then(() => {
-  app.listen(PORT, () => {
+async function startServer() {
+  try {
+    await checkAndInitializeDatabase();
+    app.listen(PORT, () => {
     console.log(`=========================================`);
     console.log(` EngageHub MVP Server started on port ${PORT}`);
     console.log(` Local link: http://localhost:${PORT}`);
@@ -193,12 +195,16 @@ checkAndInitializeDatabase().then(() => {
     }
     
     console.log(`=========================================`);
-  });
-}).catch(async (error) => {
-  console.error('Server startup failed; refusing to listen with an uninitialized database:', error);
-  try {
+    });
+  } catch (error) {
+    console.error('Server startup failed; refusing to listen with an uninitialized database:', error);
     await pool.end();
-  } finally {
     process.exitCode = 1;
   }
-});
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
