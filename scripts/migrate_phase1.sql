@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS vinculo_migrations (
   applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE task_activity_legacy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vinculo_migrations ENABLE ROW LEVEL SECURITY;
+
 -- Every task receives a visit engagement. Existing rows are preserved.
 INSERT INTO task_engagements (
   task_id,
