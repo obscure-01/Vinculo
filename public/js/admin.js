@@ -6,146 +6,124 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!adminUser) return; // checkAuth will handle redirect
 
     // DOM Elements - Sidebar Navigation (Desktop & Mobile)
-    const views = {
-        dashboard: {
-            nav: document.getElementById('nav-dashboard'),
-            mobNav: document.getElementById('mobile-nav-dashboard'),
-            section: document.getElementById('view-dashboard-section'),
-            title: 'Dashboard Overview',
-            subtitle: 'Monitor task engagement and student performance.'
-        },
-        createTask: {
-            nav: document.getElementById('nav-create-task'),
-            mobNav: document.getElementById('mobile-nav-create-task'),
-            section: document.getElementById('view-create-task-section'),
-            title: 'Create Task',
-            subtitle: 'Assign an Instagram reel or YouTube video task to all registered students.'
-        },
-        manageTasks: {
-            nav: document.getElementById('nav-manage-tasks'),
-            mobNav: document.getElementById('mobile-nav-manage-tasks'),
-            section: document.getElementById('view-manage-tasks-section'),
-            title: 'Manage Tasks',
-            subtitle: 'Review all active tasks and delete them when necessary.'
-        },
-        analytics: {
-            nav: document.getElementById('nav-analytics'),
-            mobNav: document.getElementById('mobile-nav-analytics'),
-            section: document.getElementById('view-analytics-section'),
-            title: 'Analytics Insights',
-            subtitle: 'Detailed institutional participation metrics.'
-        },
-        students: {
-            nav: document.getElementById('nav-students'),
-            mobNav: document.getElementById('mobile-nav-students'),
-            section: document.getElementById('view-students-section'),
-            title: 'Student Management',
-            subtitle: 'View, track, and manage student accounts.'
-        },
-        tracking: {
-            nav: document.getElementById('nav-tracking'),
-            mobNav: document.getElementById('mobile-nav-tracking'),
-            section: document.getElementById('view-tracking-section'),
-            title: 'Student Task Tracking',
-            subtitle: 'Track task status and points earned by individual students.'
-        },
-        leaderboard: {
-            nav: document.getElementById('nav-leaderboard'),
-            mobNav: document.getElementById('mobile-nav-leaderboard'),
-            section: document.getElementById('view-leaderboard-section'),
-            title: 'Leaderboard Rankings',
-            subtitle: 'Rankings of students sorted by total points accumulated.'
-        },
-        verificationLogs: {
-            nav: document.getElementById('nav-verification-logs'),
-            mobNav: document.getElementById('mobile-nav-verification-logs'),
-            section: document.getElementById('view-verification-logs-section'),
-            title: 'Verification Audit Logs',
-            subtitle: 'Permanent audit records of comment verification attempts.'
-        },
-        settings: {
-            nav: document.getElementById('nav-settings'),
-            mobNav: document.getElementById('mobile-nav-settings'),
-            section: document.getElementById('view-settings-section'),
-            title: 'System Settings',
-            subtitle: 'Configure external integrations and administrative preferences.'
-        }
-    };
-
+    
     const pageTitle = document.getElementById('page-title');
     const pageSubtitle = document.getElementById('page-subtitle');
     const headerActions = document.getElementById('header-actions');
     const btnCreateTaskHeader = document.getElementById('btn-create-task-header');
 
-    // Navigation state controller
-    function switchView(viewKey) {
-        // Toggle view sections
-        Object.keys(views).forEach(key => {
-            const v = views[key];
-            if (key === viewKey) {
-                v.section.classList.remove('hidden');
-                if (v.nav) {
-                    v.nav.classList.add('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.nav.classList.remove('text-secondary-fixed-dim', 'font-normal');
-                }
-                if (v.mobNav) {
-                    v.mobNav.classList.add('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.mobNav.classList.remove('text-secondary-fixed-dim', 'font-normal');
-                }
-                pageTitle.textContent = v.title;
-                pageSubtitle.textContent = v.subtitle;
-            } else {
-                v.section.classList.add('hidden');
-                if (v.nav) {
-                    v.nav.classList.remove('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.nav.classList.add('text-secondary-fixed-dim', 'font-normal');
-                }
-                if (v.mobNav) {
-                    v.mobNav.classList.remove('text-primary-fixed-dim', 'font-bold', 'bg-on-secondary-container');
-                    v.mobNav.classList.add('text-secondary-fixed-dim', 'font-normal');
-                }
-            }
-        });
-
-        // Hide header action create button if already on Create page
+    function onAdminViewEnter(title, subtitle, viewKey, fetchCallback) {
+        pageTitle.textContent = title;
+        pageSubtitle.textContent = subtitle;
         if (viewKey === 'createTask') {
             headerActions.classList.add('hidden');
         } else {
             headerActions.classList.remove('hidden');
         }
-
-        // Fetch data relevant to the active view
-        if (viewKey === 'dashboard') {
-            fetchDashboardOverview();
-            fetchRecentTasks();
-        } else if (viewKey === 'manageTasks') {
-            fetchManageTasksList();
-        } else if (viewKey === 'analytics') {
-            fetchAnalytics();
-        } else if (viewKey === 'students') {
-            fetchStudentsList();
-        } else if (viewKey === 'tracking') {
-            fetchTrackingData();
-        } else if (viewKey === 'leaderboard') {
-            fetchLeaderboard();
-        } else if (viewKey === 'verificationLogs') {
-            fetchVerificationLogs();
-        } else if (viewKey === 'settings') {
-            fetchSettings();
-        }
-        
-        // Close mobile sidebar if open
-        document.getElementById('mobile-sidebar').classList.add('hidden');
+        if (fetchCallback) fetchCallback();
     }
 
-    // Attach click events to nav items
-    Object.keys(views).forEach(key => {
-        const v = views[key];
-        if (v.nav) v.nav.addEventListener('click', () => switchView(key));
-        if (v.mobNav) v.mobNav.addEventListener('click', () => switchView(key));
+    // Register Views
+    ViewManager.registerView('dashboard', {
+        nav: document.getElementById('nav-dashboard'),
+        mobNav: document.getElementById('mobile-nav-dashboard'),
+        section: document.getElementById('view-dashboard-section'),
+        onEnter: () => onAdminViewEnter('Admin Dashboard', 'Overview of engagement platform activity.', 'dashboard', () => {
+            fetchDashboardOverview();
+            fetchRecentTasks();
+        })
     });
 
-    // Mobile sidebar toggle
+    ViewManager.registerView('createTask', {
+        nav: document.getElementById('nav-create-task'),
+        mobNav: document.getElementById('mobile-nav-create-task'),
+        section: document.getElementById('view-create-task-section'),
+        onEnter: () => onAdminViewEnter('Create New Task', 'Publish a new engagement task.', 'createTask')
+    });
+
+    ViewManager.registerView('manageTasks', {
+        nav: document.getElementById('nav-manage-tasks'),
+        mobNav: document.getElementById('mobile-nav-manage-tasks'),
+        section: document.getElementById('view-manage-tasks-section'),
+        onEnter: () => onAdminViewEnter('Manage Tasks', 'View, edit, and deactivate existing tasks.', 'manageTasks', fetchManageTasksList)
+    });
+
+    ViewManager.registerView('analytics', {
+        nav: document.getElementById('nav-analytics'),
+        mobNav: document.getElementById('mobile-nav-analytics'),
+        section: document.getElementById('view-analytics-section'),
+        onEnter: () => onAdminViewEnter('Analytics Insights', 'Detailed institutional participation metrics.', 'analytics', fetchAnalytics)
+    });
+
+    ViewManager.registerView('students', {
+        nav: document.getElementById('nav-students'),
+        mobNav: document.getElementById('mobile-nav-students'),
+        section: document.getElementById('view-students-section'),
+        onEnter: () => onAdminViewEnter('Student Management', 'View, track, and manage student accounts.', 'students', fetchStudentsList)
+    });
+
+    ViewManager.registerView('tracking', {
+        nav: document.getElementById('nav-tracking'),
+        mobNav: document.getElementById('mobile-nav-tracking'),
+        section: document.getElementById('view-tracking-section'),
+        onEnter: () => onAdminViewEnter('Student Task Tracking', 'Track task status and points earned by individual students.', 'tracking', fetchTrackingData)
+    });
+
+    ViewManager.registerView('manualAudits', {
+        nav: document.getElementById('nav-manual-audits'),
+        mobNav: document.getElementById('mobile-nav-manual-audits'),
+        section: document.getElementById('view-manual-audits-section'),
+        onEnter: () => onAdminViewEnter('Manual Engagement Audits', 'Review manual task submissions pending verification.', 'manualAudits', fetchManualAuditsOverview)
+    });
+
+    ViewManager.registerView('leaderboard', {
+        nav: document.getElementById('nav-leaderboard'),
+        mobNav: document.getElementById('mobile-nav-leaderboard'),
+        section: document.getElementById('view-leaderboard-section'),
+        onEnter: () => onAdminViewEnter('Leaderboard Rankings', 'Rankings of students sorted by total points accumulated.', 'leaderboard', fetchLeaderboard)
+    });
+
+    ViewManager.registerView('verificationLogs', {
+        nav: document.getElementById('nav-verification-logs'),
+        mobNav: document.getElementById('mobile-nav-verification-logs'),
+        section: document.getElementById('view-verification-logs-section'),
+        onEnter: () => onAdminViewEnter('Verification Audit Logs', 'Permanent audit records of comment verification attempts.', 'verificationLogs', fetchVerificationLogs)
+    });
+
+    ViewManager.registerView('settings', {
+        nav: document.getElementById('nav-settings'),
+        mobNav: document.getElementById('mobile-nav-settings'),
+        section: document.getElementById('view-settings-section'),
+        onEnter: () => onAdminViewEnter('System Settings', 'Configure external integrations and administrative preferences.', 'settings', fetchSettings)
+    });
+
+    // New Module 3 Infrastructure Routes
+    ViewManager.registerView('verificationQueue', {
+        nav: document.getElementById('nav-verification-queue'),
+        mobNav: document.getElementById('mobile-nav-verification-queue'),
+        section: document.getElementById('view-verification-queue-section'),
+        onEnter: () => onAdminViewEnter('Verification Queue', 'Manage and verify pending student tasks.', 'verificationQueue')
+    });
+
+    ViewManager.registerView('history', {
+        nav: document.getElementById('nav-history'),
+        mobNav: document.getElementById('mobile-nav-history'),
+        section: document.getElementById('view-history-section'),
+        onEnter: () => {
+            onAdminViewEnter('History', 'Historical records of actions and tasks.', 'history');
+            if(typeof fetchAuditHistory === 'function') fetchAuditHistory();
+            else if (ViewManager.events && ViewManager.events.onHistoryEnter) ViewManager.events.onHistoryEnter();
+        }
+    });
+
+    ViewManager.registerView('reviewLogs', {
+        nav: document.getElementById('nav-review-logs'),
+        mobNav: document.getElementById('mobile-nav-review-logs'),
+        section: document.getElementById('view-review-logs-section'),
+        onEnter: () => onAdminViewEnter('Review Logs', 'Logs of administrative reviews and audits.', 'reviewLogs')
+    });
+
+    // Mobile menu toggles
     const mobileSidebar = document.getElementById('mobile-sidebar');
     document.getElementById('mobile-menu-toggle').addEventListener('click', () => {
         mobileSidebar.classList.remove('hidden');
@@ -158,9 +136,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Link top right dashboard header button to switch view
-    btnCreateTaskHeader.addEventListener('click', () => switchView('createTask'));
-    document.getElementById('btn-view-all-tasks').addEventListener('click', () => switchView('manageTasks'));
-    document.getElementById('btn-cancel-create').addEventListener('click', () => switchView('dashboard'));
+    btnCreateTaskHeader.addEventListener('click', () => ViewManager.switchView('createTask'));
+    document.getElementById('btn-view-all-tasks').addEventListener('click', () => ViewManager.switchView('manageTasks'));
+    document.getElementById('btn-cancel-create').addEventListener('click', () => ViewManager.switchView('dashboard'));
 
     // Logout triggers
     document.getElementById('btn-logout').addEventListener('click', logout);
@@ -186,31 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => toast.classList.add('hidden'), 5000);
     }
 
-    // API Helper utility
-    async function apiRequest(url, options = {}) {
-        const token = getToken();
-        const headers = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        };
-        const config = { ...options, headers: { ...headers, ...options.headers } };
-        
-        try {
-            const response = await fetch(url, config);
-            const data = await response.json();
-            if (!response.ok) {
-                if (response.status === 401 || response.status === 403) {
-                    clearAuth();
-                    window.location.href = '/';
-                }
-                throw new Error(data.error || 'Server error');
-            }
-            return data;
-        } catch (error) {
-            console.error(`API Error for ${url}:`, error);
-            throw error;
-        }
-    }
+    
 
     // ──────────────────────────────────────────────────────────
     // DATA FETCHERS & RENDERING
@@ -1060,15 +1014,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // FORM SUBMISSIONS
     // ──────────────────────────────────────────────────────────
 
-    async function handlePublishTask(title, platform, socialLink, durationDays) {
+    async function handlePublishTask(title, platform, socialLink, durationDays, verificationMethod, engagementType) {
         try {
             const data = await apiRequest('/api/admin/tasks', {
                 method: 'POST',
-                body: JSON.stringify({ title, platform, socialLink, durationDays })
+                body: JSON.stringify({ title, platform, socialLink, durationDays, verification_method: verificationMethod, engagement_type: engagementType })
             });
 
             showToast(data.message);
-            switchView('dashboard'); // Redirect to dashboard
+            ViewManager.init('dashboard'); // Redirect to dashboard
             return true;
         } catch (error) {
             showToast(error.message, true);
@@ -1111,8 +1065,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const durationDays = durationSelect === 'custom' 
             ? document.getElementById('quickCustomDuration').value 
             : durationSelect;
+        const verificationMethod = document.getElementById('quickVerificationMethod').value;
+        const engagementType = document.getElementById('quickEngagementType').value;
 
-        const success = await handlePublishTask(title, platform, socialLink, durationDays);
+        const success = await handlePublishTask(title, platform, socialLink, durationDays, verificationMethod, engagementType);
         if (success) {
             document.getElementById('quick-create-form').reset();
             document.getElementById('quickCustomDurationContainer').classList.add('hidden');
@@ -1130,8 +1086,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const durationDays = durationSelect === 'custom' 
             ? document.getElementById('customDuration').value 
             : durationSelect;
+        const verificationMethod = document.getElementById('verificationMethod').value;
+        const engagementType = document.getElementById('engagementType').value;
 
-        const success = await handlePublishTask(title, platform, socialLink, durationDays);
+        const success = await handlePublishTask(title, platform, socialLink, durationDays, verificationMethod, engagementType);
         if (success) {
             document.getElementById('standalone-create-form').reset();
             document.getElementById('customDurationContainer').classList.add('hidden');
@@ -1154,5 +1112,321 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Initialize: Start on Dashboard View
-    switchView('dashboard');
+    ViewManager.init('dashboard');
+    // 9. Manual Audits logic
+    let currentBatchData = null;
+
+    async function fetchManualAuditsOverview() {
+        try {
+            const data = await apiRequest('/api/admin/manual-audits/overview');
+            document.getElementById('manual-audit-pending-count').textContent = data.pendingCount;
+            document.getElementById('manual-audit-approved-count').textContent = data.approvedToday;
+            document.getElementById('manual-audit-rejected-count').textContent = data.rejectedToday;
+
+            // Also load the list
+            fetchPendingAuditsList();
+        } catch (error) {
+            showToast('Failed to load manual audits overview', true);
+        }
+    }
+
+    let currentAuditPage = 1;
+
+    async function fetchPendingAuditsList(page = 1) {
+        currentAuditPage = page;
+        const listContainer = document.getElementById('all-pending-audits-list');
+        listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-on-surface-variant">Loading pending audits...</td></tr>';
+        
+        try {
+            const statusFilter = document.getElementById('audit-status-filter')?.value || 'PENDING';
+            const searchInput = document.getElementById('audit-search-input')?.value.toLowerCase() || '';
+            const sortOrder = document.getElementById('audit-sort-select')?.value || 'newest';
+            
+            // Backend takes status. We will do search and sort on the client side since the backend doesn't support them natively in the endpoint, 
+            // OR if the endpoint supports search/sort, we'd pass it. The prompt says "Do NOT modify backend APIs".
+            // The existing backend is /manual-audits?status=...&page=...&limit=...
+            const data = await apiRequest(`/api/admin/manual-audits?status=${statusFilter}&page=${page}&limit=500`);
+            let audits = data.audits || data.data || [];
+
+            if (searchInput) {
+                audits = audits.filter(a => 
+                    (a.student_name && a.student_name.toLowerCase().includes(searchInput)) ||
+                    (a.task_title && a.task_title.toLowerCase().includes(searchInput))
+                );
+            }
+
+            if (sortOrder === 'oldest') {
+                audits.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            } else {
+                audits.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            }
+
+            // Slice for local pagination since we fetched a larger limit to support local filter/sort
+            const limit = 50;
+            const startIndex = (page - 1) * limit;
+            const paginatedAudits = audits.slice(startIndex, startIndex + limit);
+            audits = paginatedAudits;
+
+            if (audits.length === 0) {
+                listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-on-surface-variant">No pending manual audits.</td></tr>';
+                return;
+            }
+
+            listContainer.innerHTML = audits.map(audit => {
+                const dateStr = new Date(audit.created_at).toLocaleString();
+                const badge = getPlatformBadge(audit.platform);
+
+                return `
+                    <tr class="hover:bg-surface-container-low/50 transition-colors">
+                        <td class="px-6 py-4 text-xs font-mono text-secondary">#MA-${audit.id}</td>
+                        <td class="px-6 py-4 font-semibold text-on-surface">${escapeHTML(audit.student_name)}</td>
+                        <td class="px-6 py-4">
+                            <div class="font-medium text-on-surface text-sm mb-1">${escapeHTML(audit.task_title)}</div>
+                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold border ${badge.class}">
+                                ${audit.platform} - ${audit.engagement_type}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-xs text-secondary">${dateStr}</td>
+                        <td class="px-6 py-4 text-right">
+                            <a href="${audit.social_link}" target="_blank" class="inline-flex items-center justify-center p-1.5 bg-primary-container text-on-primary-container hover:bg-primary hover:text-on-primary transition-colors rounded" title="View Social Link">
+                                <span class="material-symbols-outlined text-[18px]">open_in_new</span>
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+        } catch (error) {
+            listContainer.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-sm text-error">Failed to load pending audits.</td></tr>';
+        }
+    }
+
+    document.getElementById('audit-status-filter')?.addEventListener('change', () => fetchPendingAuditsList(1));
+    document.getElementById('audit-sort-select')?.addEventListener('change', () => fetchPendingAuditsList(1));
+    let searchTimeout;
+    document.getElementById('audit-search-input')?.addEventListener('input', () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => fetchPendingAuditsList(1), 300);
+    });
+
+    document.getElementById('btn-generate-audit-batch')?.addEventListener('click', async () => {
+        try {
+            const data = await apiRequest('/api/admin/manual-audits/generate-batch', { method: 'POST' });
+            if (!data.batch || data.batch.length === 0) {
+                showToast('No pending audits available for review at this time.', false);
+                return;
+            }
+
+            currentBatchData = data.batch.map(item => ({ ...item, decision: null, rejectionReason: null, notes: null }));
+            renderBatchWorkspace();
+
+            document.getElementById('all-pending-audits-view').classList.add('hidden');
+            document.getElementById('batch-review-workspace').classList.remove('hidden');
+            document.getElementById('btn-generate-audit-batch').disabled = true;
+
+        } catch (error) {
+            showToast(error.message, true);
+        }
+    });
+
+    function renderBatchWorkspace() {
+        const listContainer = document.getElementById('batch-review-list');
+        const submitBtn = document.getElementById('btn-submit-batch');
+        const statusCount = document.getElementById('batch-status-count');
+
+        let reviewedCount = 0;
+
+        listContainer.innerHTML = currentBatchData.map((item, index) => {
+            const badge = getPlatformBadge(item.platform);
+            if (item.decision !== null) reviewedCount++;
+
+            const approveClass = item.decision === 'APPROVED' ? 'bg-tertiary text-on-tertiary border-tertiary' : 'bg-surface text-secondary hover:bg-tertiary-container border-outline-variant';
+            const rejectClass = item.decision === 'REJECTED' ? 'bg-error text-on-error border-error' : 'bg-surface text-secondary hover:bg-error-container border-outline-variant';
+
+            return `
+                <tr class="${item.decision ? 'bg-surface' : 'bg-surface-container-low'} border-b border-surface-container">
+                    <td class="px-6 py-4 align-top">
+                        <div class="font-bold text-on-surface mb-1">${escapeHTML(item.student_name)}</div>
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold border ${badge.class}">
+                            ${item.platform}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 align-top">
+                        <div class="font-medium text-on-surface text-sm mb-1">${escapeHTML(item.task_title)}</div>
+                        <div class="text-xs text-secondary mb-2">Type: <strong>${item.engagement_type}</strong></div>
+                        <a href="${item.social_link}" target="_blank" class="inline-flex items-center gap-1 text-xs text-primary hover:underline font-semibold">
+                            Open Link <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                        </a>
+                    </td>
+                    <td class="px-6 py-4 align-top text-center">
+                        <div class="flex flex-col gap-2 max-w-[120px] mx-auto">
+                            <button onclick="setBatchDecision(${index}, 'APPROVED')" class="px-3 py-1.5 text-xs font-bold border transition-colors rounded ${approveClass}">APPROVE</button>
+                            <button onclick="setBatchDecision(${index}, 'REJECTED')" class="px-3 py-1.5 text-xs font-bold border transition-colors rounded ${rejectClass}">REJECT</button>
+                        </div>
+                    </td>
+                    <td class="px-6 py-4 align-top">
+                        <div class="${item.decision === 'REJECTED' ? 'block' : 'hidden'} space-y-2 max-w-xs">
+                            <select id="reason-${index}" onchange="updateBatchReason(${index}, this.value)" class="w-full text-xs p-1.5 border border-outline-variant rounded bg-surface">
+                                <option value="" disabled ${!item.rejectionReason ? 'selected' : ''}>Select Reason</option>
+                                <option value="Like not found" ${item.rejectionReason === 'Like not found' ? 'selected' : ''}>Like not found</option>
+                                <option value="Engagement not visible" ${item.rejectionReason === 'Engagement not visible' ? 'selected' : ''}>Engagement not visible</option>
+                                <option value="Wrong account" ${item.rejectionReason === 'Wrong account' ? 'selected' : ''}>Wrong account</option>
+                                <option value="Account not accessible" ${item.rejectionReason === 'Account not accessible' ? 'selected' : ''}>Account not accessible</option>
+                                <option value="Task expired" ${item.rejectionReason === 'Task expired' ? 'selected' : ''}>Task expired</option>
+                                <option value="Already reviewed" ${item.rejectionReason === 'Already reviewed' ? 'selected' : ''}>Already reviewed</option>
+                                <option value="Other" ${item.rejectionReason === 'Other' ? 'selected' : ''}>Other</option>
+                            </select>
+                            <input type="text" id="notes-${index}" oninput="updateBatchNotes(${index}, this.value)" value="${item.notes || ''}" placeholder="Optional notes..." class="w-full text-xs p-1.5 border border-outline-variant rounded bg-surface ${item.rejectionReason === 'Other' ? 'block' : 'hidden'}">
+                        </div>
+                        <div class="${item.decision === 'APPROVED' ? 'block' : 'hidden'} text-xs text-tertiary font-semibold flex items-center gap-1">
+                            <span class="material-symbols-outlined text-[14px]">check_circle</span> Approved
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        statusCount.textContent = `${reviewedCount} / ${currentBatchData.length} Reviewed`;
+
+        // Validation for submit button
+        const allReviewed = currentBatchData.every(item => item.decision !== null);
+        const allRejectionsValid = currentBatchData.every(item => {
+            if (item.decision === 'REJECTED') {
+                if (!item.rejectionReason || item.rejectionReason.trim() === '') return false;
+                if (item.rejectionReason === 'Other' && (!item.notes || item.notes.trim() === '')) return false;
+                return true;
+            }
+            return true;
+        });
+
+        submitBtn.disabled = !(allReviewed && allRejectionsValid);
+    }
+
+    window.setBatchDecision = function(index, decision) {
+        currentBatchData[index].decision = decision;
+        if (decision === 'APPROVED') {
+            currentBatchData[index].rejectionReason = null;
+            currentBatchData[index].notes = null;
+        }
+        renderBatchWorkspace();
+    };
+
+    window.updateBatchReason = function(index, reason) {
+        currentBatchData[index].rejectionReason = reason;
+        renderBatchWorkspace(); // re-render to show/hide notes input and validate
+    };
+
+    window.updateBatchNotes = function(index, notes) {
+        currentBatchData[index].notes = notes;
+        // Don't re-render on input to avoid losing focus
+        // We validate on submit anyway or the select change already triggered validation check
+        const submitBtn = document.getElementById('btn-submit-batch');
+        const allReviewed = currentBatchData.every(item => item.decision !== null);
+        const allRejectionsValid = currentBatchData.every(item => {
+            if (item.decision === 'REJECTED') {
+                return item.rejectionReason && item.rejectionReason.trim() !== '';
+            }
+            return true;
+        });
+        submitBtn.disabled = !(allReviewed && allRejectionsValid);
+    };
+
+    document.getElementById('btn-cancel-batch')?.addEventListener('click', () => {
+        if (confirm('Are you sure you want to cancel this batch review? Your progress will be lost.')) {
+            closeBatchWorkspace();
+        }
+    });
+
+    document.getElementById('btn-submit-batch')?.addEventListener('click', async () => {
+        try {
+            const submitBtn = document.getElementById('btn-submit-batch');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">sync</span> Submitting...';
+
+            const groups = {};
+            currentBatchData.forEach(item => {
+                const key = `${item.decision}|${item.rejectionReason || ''}|${item.notes || ''}`;
+                if (!groups[key]) {
+                    groups[key] = {
+                        action: item.decision === 'APPROVED' ? 'approve' : 'reject',
+                        reason: item.decision === 'REJECTED' ? item.rejectionReason : null,
+                        notes: item.decision === 'REJECTED' ? item.notes : null,
+                        auditIds: [],
+                        items: []
+                    };
+                }
+                groups[key].auditIds.push(item.id);
+                groups[key].items.push(item);
+            });
+
+            const requests = Object.values(groups).map(group => {
+                return apiRequest('/api/admin/manual-audits/batch-review', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        auditIds: group.auditIds,
+                        action: group.action,
+                        reason: group.reason,
+                        notes: group.notes
+                    })
+                }).then(res => ({ group, res }))
+                .catch(error => {
+                    error.group = group;
+                    throw error;
+                });
+            });
+
+            const results = await Promise.allSettled(requests);
+            
+            let successCount = 0;
+            let failureCount = 0;
+            let failedItems = [];
+
+            results.forEach(result => {
+                if (result.status === 'fulfilled') {
+                    successCount += result.value.group.items.length;
+                } else {
+                    failureCount += result.reason?.group?.items?.length || 0;
+                    if (result.reason && result.reason.group) {
+                        failedItems.push(...result.reason.group.items);
+                    } else {
+                        console.error('Batch review error:', result.reason);
+                    }
+                }
+            });
+
+            if (failureCount === 0) {
+                showToast(`Successfully processed ${successCount} audits.`, false);
+                closeBatchWorkspace();
+            } else {
+                showToast(`Batch submitted partially. ${successCount} succeeded, ${failedItems.length} failed. Please retry remaining.`, true);
+                currentBatchData = failedItems;
+                renderBatchWorkspace();
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">done_all</span> Submit Batch Decisions';
+                submitBtn.disabled = false;
+            }
+
+            fetchManualAuditsOverview(); // Exactly ONE queue refresh
+        } catch (error) {
+            showToast(error.message || 'An unexpected error occurred.', true);
+            const submitBtn = document.getElementById('btn-submit-batch');
+            if (submitBtn) {
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">done_all</span> Submit Batch Decisions';
+                submitBtn.disabled = false;
+            }
+        }
+    });
+
+    function closeBatchWorkspace() {
+        currentBatchData = null;
+        document.getElementById('batch-review-workspace').classList.add('hidden');
+        document.getElementById('all-pending-audits-view').classList.remove('hidden');
+        document.getElementById('btn-generate-audit-batch').disabled = false;
+    }
+
+    ViewManager.init('dashboard');
 });
+
+
+
+
+

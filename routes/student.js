@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authenticateToken, requireRole } = require('../middleware');
+const manualAuditService = require('../services/manualAuditService');
 
 // Protect all routes with JWT and check for 'Student' role
 router.use(authenticateToken, requireRole('Student'));
@@ -26,35 +27,6 @@ function checkRateLimit(userId, taskId) {
   }
   rateLimitMap.set(key, { count: 1, resetTime: now + 5 * 60 * 1000 });
   return true;
-}
-
-async function awardCommentPoints(userId, taskId, status) {
-  return db.withTransaction(async (client) => {
-    const activityResult = await client.query(`
-      UPDATE task_activity
-      SET comment_status = $3,
-          comment_verified_at = CURRENT_TIMESTAMP,
-          comment_points_awarded = 5
-      WHERE user_id = $1
-        AND task_id = $2
-        AND status = 'COMPLETED'
-        AND COALESCE(comment_points_awarded, 0) = 0
-        AND comment_status NOT IN ('Comment Detected', 'Comment Verified', 'Verification Successful')
-      RETURNING id
-    `, [userId, taskId, status]);
-
-    if (activityResult.rowCount !== 1) return false;
-
-    const userResult = await client.query(
-      'UPDATE users SET points = points + 5 WHERE id = $1 RETURNING id',
-      [userId]
-    );
-    if (userResult.rowCount !== 1) {
-      throw new Error('Student record missing while awarding comment points.');
-    }
-
-    return true;
-  });
 }
 
 // Facebook Post ID Extraction
@@ -143,18 +115,52 @@ router.get('/tasks', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
-        t.points,
         t.expiry_date,
-        COALESCE(ta.status, 'PENDING') as status,
-        ta.opened_at
+        t.status,
+        (
+          SELECT MIN(sa.created_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
+        ) as opened_at
       FROM tasks t
-      LEFT JOIN task_activity ta ON ta.task_id = t.id AND ta.user_id = $1
-      WHERE (ta.status IS NULL OR ta.status != 'COMPLETED')
-        AND t.expiry_date >= CURRENT_TIMESTAMP
+      WHERE t.expiry_date >= CURRENT_TIMESTAMP
+        AND EXISTS (
+          SELECT 1 FROM task_engagements te
+          WHERE te.task_id = t.id AND te.is_required = TRUE
+          AND NOT EXISTS (
+            SELECT 1 FROM student_activities sa
+            WHERE sa.task_engagement_id = te.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+          )
+        )
       ORDER BY t.created_at DESC
     `;
-    const result = await db.query(tasksQuery, [userId]);
-    res.json(result.rows);
+    const tasksResult = await db.query(tasksQuery, [userId]);
+    const tasks = tasksResult.rows;
+
+    if (tasks.length === 0) {
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+    const engagementsQuery = `
+      SELECT te.id, te.task_id, te.engagement_type, te.verification_type,
+             te.is_required, te.points,
+             sa.status AS activity_status,
+             ma.status AS manual_audit_status,
+             rl.rejection_reason
+      FROM task_engagements te
+      LEFT JOIN student_activities sa ON sa.task_engagement_id = te.id AND sa.user_id = $1
+      LEFT JOIN manual_audits ma ON ma.student_activity_id = sa.id
+      LEFT JOIN review_logs rl ON rl.manual_audit_id = ma.id
+      WHERE te.task_id = ANY($2)
+    `;
+    const engagementsResult = await db.query(engagementsQuery, [userId, taskIds]);
+    const engagements = engagementsResult.rows;
+
+    const taskMap = new Map(tasks.map(t => [t.id, { ...t, engagements: [] }]));
+    for (const eng of engagements) {
+      taskMap.get(eng.task_id)?.engagements.push(eng);
+    }
+
+    res.json(Array.from(taskMap.values()));
   } catch (error) {
     console.error('Error fetching student tasks:', error);
     res.status(500).json({ error: 'Failed to retrieve tasks.' });
@@ -172,21 +178,111 @@ router.get('/tasks/completed', async (req, res) => {
         t.title, 
         t.platform, 
         t.social_link, 
-        t.points,
-        ta.completed_at,
-        ta.time_spent,
-        ta.comment_status,
-        ta.comment_points_awarded
+        (
+          SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+        ) as completed_at,
+        NULL as time_spent
       FROM tasks t
-      JOIN task_activity ta ON ta.task_id = t.id AND ta.user_id = $1
-      WHERE ta.status = 'COMPLETED'
-      ORDER BY ta.completed_at DESC
+      WHERE NOT EXISTS (
+        SELECT 1 FROM task_engagements te
+        WHERE te.task_id = t.id AND te.is_required = TRUE
+        AND NOT EXISTS (
+          SELECT 1 FROM student_activities sa
+          WHERE sa.task_engagement_id = te.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+        )
+      ) AND EXISTS (
+        SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
+      )
+      ORDER BY completed_at DESC
     `;
-    const result = await db.query(completedQuery, [userId]);
-    res.json(result.rows);
+    const tasksResult = await db.query(completedQuery, [userId]);
+    const tasks = tasksResult.rows;
+
+    if (tasks.length === 0) {
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+    const engagementsQuery = `
+      SELECT te.id, te.task_id, te.engagement_type, te.verification_type,
+             te.is_required, te.points,
+             sa.status AS activity_status,
+             ma.status AS manual_audit_status,
+             rl.rejection_reason
+      FROM task_engagements te
+      LEFT JOIN student_activities sa ON sa.task_engagement_id = te.id AND sa.user_id = $1
+      LEFT JOIN manual_audits ma ON ma.student_activity_id = sa.id
+      LEFT JOIN review_logs rl ON rl.manual_audit_id = ma.id
+      WHERE te.task_id = ANY($2)
+    `;
+    const engagementsResult = await db.query(engagementsQuery, [userId, taskIds]);
+    const engagements = engagementsResult.rows;
+
+    const taskMap = new Map(tasks.map(t => [t.id, { ...t, engagements: [] }]));
+    for (const eng of engagements) {
+      taskMap.get(eng.task_id)?.engagements.push(eng);
+    }
+
+    res.json(Array.from(taskMap.values()));
   } catch (error) {
     console.error('Error fetching student completed tasks:', error);
     res.status(500).json({ error: 'Failed to retrieve completed tasks.' });
+  }
+});
+
+// 2c. Task Progress List (Submitted, Rejected, Completed)
+router.get('/tasks/progress', async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+     const progressQuery = `
+      SELECT 
+        t.id, 
+        t.title, 
+        t.platform, 
+        t.social_link, 
+        (
+          SELECT MAX(sa.completed_at) FROM student_activities sa JOIN task_engagements te ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+        ) as completed_at,
+        NULL as time_spent
+      FROM tasks t
+      WHERE EXISTS (
+        SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1 AND sa.status != 'Pending'
+      )
+      ORDER BY t.created_at DESC
+    `;
+    const tasksResult = await db.query(progressQuery, [userId]);
+    const tasks = tasksResult.rows;
+
+    if (tasks.length === 0) {
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+    const engagementsQuery = `
+      SELECT te.id, te.task_id, te.engagement_type, te.verification_type,
+             te.is_required, te.points,
+             sa.status AS activity_status,
+             ma.status AS manual_audit_status,
+             rl.rejection_reason
+      FROM task_engagements te
+      LEFT JOIN student_activities sa ON sa.task_engagement_id = te.id AND sa.user_id = $1
+      LEFT JOIN manual_audits ma ON ma.student_activity_id = sa.id
+      LEFT JOIN review_logs rl ON rl.manual_audit_id = ma.id
+      WHERE te.task_id = ANY($2)
+    `;
+    const engagementsResult = await db.query(engagementsQuery, [userId, taskIds]);
+    const engagements = engagementsResult.rows;
+
+    const taskMap = new Map(tasks.map(t => [t.id, { ...t, engagements: [] }]));
+    for (const eng of engagements) {
+      taskMap.get(eng.task_id)?.engagements.push(eng);
+    }
+
+    res.json(Array.from(taskMap.values()));
+  } catch (error) {
+    console.error('Error fetching student task progress:', error);
+    res.status(500).json({ error: 'Failed to retrieve task progress.' });
   }
 });
 
@@ -195,42 +291,63 @@ router.post('/tasks/:id/open', async (req, res) => {
   const userId = req.user.id;
   const taskId = req.params.id;
 
+  const client = await db.pool.connect();
   try {
-    // Check if task exists
-    const taskCheck = await db.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    await client.query('BEGIN');
+    const taskCheck = await client.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
     if (taskCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Task not found.' });
     }
 
-    // Check if task has expired
     if (new Date(taskCheck.rows[0].expiry_date) < new Date()) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'This task has expired and cannot be opened.' });
     }
 
-    // Upsert task activity as OPENED and reset opened_at to now
+    const engagementCheck = await client.query('SELECT id FROM task_engagements WHERE task_id = $1 AND engagement_type = $2', [taskId, 'VISIT']);
+    if (engagementCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Task is missing required VISIT engagement configuration.' });
+    }
+    const engagementId = engagementCheck.rows[0].id;
+
     const upsertQuery = `
-      INSERT INTO task_activity (user_id, task_id, status, opened_at)
-      VALUES ($1, $2, 'OPENED', CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id, task_id) 
-      DO UPDATE SET status = 'OPENED', opened_at = CURRENT_TIMESTAMP
-      WHERE task_activity.status <> 'COMPLETED'
+      INSERT INTO student_activities (user_id, task_engagement_id, status, created_at)
+      VALUES ($1, $2, 'Pending', CURRENT_TIMESTAMP)
+      ON CONFLICT (user_id, task_engagement_id) 
+      DO UPDATE SET 
+        status = CASE 
+          WHEN student_activities.status IN ('Completed', 'Verified', 'Approved') THEN student_activities.status 
+          ELSE 'Pending' 
+        END,
+        created_at = CASE 
+          WHEN student_activities.status IN ('Completed', 'Verified', 'Approved') THEN student_activities.created_at 
+          ELSE CURRENT_TIMESTAMP 
+        END
       RETURNING *
     `;
-    const result = await db.query(upsertQuery, [userId, taskId]);
-
-    if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'This task has already been completed.' });
-    }
+    const result = await client.query(upsertQuery, [userId, engagementId]);
+    await client.query('COMMIT');
 
     res.json({
       message: 'Task status updated to OPENED.',
-      activity: result.rows[0],
+      activity: {
+         id: result.rows[0].id,
+         user_id: result.rows[0].user_id,
+         task_id: parseInt(taskId, 10),
+         status: 'OPENED',
+         opened_at: result.rows[0].created_at
+      },
       socialLink: taskCheck.rows[0].social_link
     });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error opening task:', error);
     res.status(500).json({ error: 'Failed to record task open event.' });
+  } finally {
+    client.release();
   }
 });
 
@@ -239,71 +356,109 @@ router.post('/tasks/:id/complete', async (req, res) => {
   const userId = req.user.id;
   const taskId = req.params.id;
 
+  const client = await db.pool.connect();
   try {
-    const outcome = await db.withTransaction(async (client) => {
-      const taskExists = await client.query('SELECT id FROM tasks WHERE id = $1 FOR KEY SHARE', [taskId]);
-      if (taskExists.rowCount === 0) return { error: 'not_found' };
-
-      const result = await client.query(`
-        SELECT ta.*, t.expiry_date, t.platform, t.points
-        FROM task_activity ta
-        JOIN tasks t ON t.id = ta.task_id
-        WHERE ta.user_id = $1 AND ta.task_id = $2
-        FOR UPDATE OF ta
-      `, [userId, taskId]);
-
-      if (result.rows.length === 0) return { error: 'not_opened' };
-
-      const activity = result.rows[0];
-      if (new Date(activity.expiry_date) < new Date()) return { error: 'expired' };
-      if (activity.status === 'COMPLETED') return { error: 'completed' };
-      if (activity.status !== 'OPENED') return { error: 'invalid_status' };
-
-      const elapsedSeconds = (Date.now() - new Date(activity.opened_at).getTime()) / 1000;
-      if (elapsedSeconds < 20) return { error: 'too_soon' };
-
-      const timeSpent = Math.round(elapsedSeconds);
-      const commentStatus = activity.platform === 'YouTube' ? ", comment_status = 'Not Checked'" : '';
-      const updated = await client.query(`
-        UPDATE task_activity
-        SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP,
-            time_spent = $3${commentStatus}
-        WHERE user_id = $1 AND task_id = $2 AND status = 'OPENED'
-        RETURNING *
-      `, [userId, taskId, timeSpent]);
-
-      if (updated.rowCount !== 1) return { error: 'completed' };
-
-      const userUpdate = await client.query(
-        'UPDATE users SET points = points + $2 WHERE id = $1 RETURNING id',
-        [userId, activity.points]
-      );
-      if (userUpdate.rowCount !== 1) throw new Error('Student record missing while awarding task points.');
-
-      return { activity: updated.rows[0], points: activity.points };
-    });
-
-    if (outcome.error === 'not_found') return res.status(404).json({ error: 'Task not found.' });
-    if (outcome.error === 'not_opened') return res.status(400).json({ error: 'This task has not been opened yet.' });
-    if (outcome.error === 'expired') return res.status(400).json({ error: 'This task has expired and cannot be completed.' });
-    if (outcome.error === 'completed') return res.status(400).json({ error: 'This task has already been completed.' });
-    if (outcome.error === 'invalid_status') return res.status(400).json({ error: 'Task status is invalid. Please open the task first.' });
-    if (outcome.error === 'too_soon') {
-      return res.status(400).json({ error: 'Please spend at least 20 seconds engaging with the content before completing this task.' });
+    await client.query('BEGIN');
+    const taskCheck = await client.query('SELECT expiry_date, platform FROM tasks WHERE id = $1', [taskId]);
+    if (taskCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Task not found.' });
+    }
+    if (new Date(taskCheck.rows[0].expiry_date) < new Date()) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This task has expired and cannot be completed.' });
     }
 
-    res.json({
-      message: `Task completed successfully! +${outcome.points} Points awarded.`,
-      activity: outcome.activity,
-      pointsAwarded: outcome.points
-    });
+    const engagementCheck = await client.query('SELECT id, points FROM task_engagements WHERE task_id = $1 AND engagement_type = $2', [taskId, 'VISIT']);
+    if (engagementCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Task is missing required VISIT engagement configuration.' });
+    }
+    const engagement = engagementCheck.rows[0];
+
+    const activityResult = await client.query(
+      'SELECT * FROM student_activities WHERE user_id = $1 AND task_engagement_id = $2',
+      [userId, engagement.id]
+    );
+
+    if (activityResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This task has not been opened yet.' });
+    }
+
+    const activity = activityResult.rows[0];
+
+    if (activity.status === 'Completed' || activity.status === 'Verified' || activity.status === 'Approved') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This task has already been completed.' });
+    }
+
+    if (activity.status !== 'Pending' && activity.status !== 'Started') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Task status is invalid. Please open the task first.' });
+    }
+
+    const openedTime = new Date(activity.created_at).getTime();
+    const currentTime = Date.now();
+    const elapsedSeconds = (currentTime - openedTime) / 1000;
+
+    if (elapsedSeconds < 20) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'Please spend at least 20 seconds engaging with the content before completing this task.'
+      });
+    }
+
+    if (engagement.points > 0) {
+      await client.query('UPDATE users SET points = points + $1 WHERE id = $2', [engagement.points, userId]);
+    }
+
+    await client.query(
+      `UPDATE student_activities SET status = 'Completed', completed_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [activity.id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ message: `Task marked as completed successfully! You earned ${engagement.points} points.` });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error completing task:', error);
-    res.status(500).json({ error: 'An error occurred during task completion.' });
+    res.status(500).json({ error: 'Failed to record task completion.' });
+  } finally {
+    client.release();
+  }
+});
+// Withdraw engagement manual audit
+router.post('/tasks/:taskId/engagements/:engagementId/withdraw', async (req, res) => {
+  try {
+    const result = await manualAuditService.withdrawEngagementAudit(req.user.id, req.params.engagementId);
+    res.json({ message: result.message });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error withdrawing manual audit:', error);
+    res.status(500).json({ error: 'Failed to withdraw manual audit.' });
   }
 });
 
-// 5. Leaderboard - Ranked by points
+// Submit Engagement Manual Audit
+router.post('/tasks/:taskId/engagements/:engagementId/manual-audit', async (req, res) => {
+  try {
+    const result = await manualAuditService.submitEngagementAudit(req.user.id, req.params.engagementId);
+    if (result.duplicate) {
+      return res.json({ message: result.message, status: result.status });
+    }
+    res.status(201).json({ message: result.message, audit: result.audit });
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error submitting manual audit:', error);
+    res.status(500).json({ error: 'Failed to submit manual audit.' });
+  }
+});
+// 6. Leaderboard - Ranked by points
 router.get('/leaderboard', async (req, res) => {
   try {
     const leaderboardQuery = `
@@ -338,7 +493,17 @@ router.get('/profile', async (req, res) => {
 
     // 2. Count completed tasks
     const completedResult = await db.query(
-      'SELECT COUNT(*)::int FROM task_activity WHERE user_id = $1 AND status = \'COMPLETED\'',
+      `SELECT COUNT(*)::int FROM tasks t
+       WHERE NOT EXISTS (
+         SELECT 1 FROM task_engagements te
+         WHERE te.task_id = t.id AND te.is_required = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM student_activities sa
+           WHERE sa.task_engagement_id = te.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+         )
+       ) AND EXISTS (
+         SELECT 1 FROM task_engagements te JOIN student_activities sa ON sa.task_engagement_id = te.id WHERE te.task_id = t.id AND sa.user_id = $1
+       )`,
       [userId]
     );
     const completedCount = completedResult.rows[0].count;
@@ -346,8 +511,15 @@ router.get('/profile', async (req, res) => {
     // 3. Count pending tasks (active tasks not completed by student)
     const pendingResult = await db.query(
       `SELECT COUNT(*)::int FROM tasks t
-       LEFT JOIN task_activity ta ON ta.task_id = t.id AND ta.user_id = $1 AND ta.status = 'COMPLETED'
-       WHERE t.expiry_date >= CURRENT_TIMESTAMP AND ta.id IS NULL`,
+       WHERE t.expiry_date >= CURRENT_TIMESTAMP 
+       AND EXISTS (
+         SELECT 1 FROM task_engagements te
+         WHERE te.task_id = t.id AND te.is_required = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM student_activities sa
+           WHERE sa.task_engagement_id = te.id AND sa.user_id = $1 AND sa.status IN ('Completed', 'Verified', 'Approved')
+         )
+       )`,
       [userId]
     );
     const pendingCount = pendingResult.rows[0].count;
@@ -591,47 +763,37 @@ async function logDiagnostic(data) {
 }
 
 // Verify Task Comment
+// Verify Task Comment
 router.post('/tasks/:id/verify-comment', async (req, res) => {
   const userId = req.user.id;
   const taskId = req.params.id;
 
   try {
-    // 1. Check if the task activity exists and is completed
-    const activityResult = await db.query(
-      'SELECT * FROM task_activity WHERE user_id = $1 AND task_id = $2',
-      [userId, taskId]
-    );
-
-    if (activityResult.rows.length === 0 || activityResult.rows[0].status !== 'COMPLETED') {
-      return res.status(400).json({ error: 'Task must be completed before verifying the comment.' });
-    }
-
-    const activity = activityResult.rows[0];
-
-    // 2. Check if already verified
-    if (['Comment Detected', 'Comment Verified', 'Verification Successful'].includes(activity.comment_status) || activity.comment_points_awarded > 0) {
-      return res.status(400).json({ error: 'Comment points already awarded for this task.' });
-    }
-
-    // 3. Fetch the platform of the task
-    const taskResult = await db.query('SELECT platform, social_link FROM tasks WHERE id = $1', [taskId]);
+    // 1. Fetch task and engagement
+    const taskResult = await db.query('SELECT platform, social_link, expiry_date FROM tasks WHERE id = $1', [taskId]);
     if (taskResult.rows.length === 0) {
       return res.status(404).json({ error: 'Task not found.' });
     }
-    const platform = taskResult.rows[0].platform;
-    const socialLink = taskResult.rows[0].social_link;
+    const task = taskResult.rows[0];
 
-    if (platform === 'Instagram') {
-      const status = 'Platform Not Available';
-      await db.query(
-        'UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3',
-        [status, userId, taskId]
-      );
-      return res.status(501).json({
-        error: 'Instagram comment verification is not available. No bonus points were awarded.',
-        comment_status: status,
-        pointsAwarded: 0
-      });
+    if (new Date(task.expiry_date) < new Date()) {
+      return res.status(400).json({ error: 'This task has expired and cannot be verified.' });
+    }
+
+    const platform = task.platform;
+    const socialLink = task.social_link;
+
+    const engagementResult = await db.query('SELECT id, points FROM task_engagements WHERE task_id = $1 AND engagement_type = $2', [taskId, 'COMMENT']);
+    if (engagementResult.rows.length === 0) {
+      return res.status(400).json({ error: 'No comment engagement configured for this task.' });
+    }
+    const engagement = engagementResult.rows[0];
+    const engagementId = engagement.id;
+
+    // 2. Check if already verified
+    const activityResult = await db.query('SELECT status FROM student_activities WHERE user_id = $1 AND task_engagement_id = $2', [userId, engagementId]);
+    if (activityResult.rows.length > 0 && ['Verified', 'Approved', 'Completed'].includes(activityResult.rows[0].status)) {
+      return res.status(400).json({ error: 'Comment points already awarded for this task.' });
     }
 
     // 4. Fetch user details to get the relevant handle
@@ -665,10 +827,19 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       reason: ''
     };
 
+    const updateActivityState = async (statusStr) => {
+      const saStatus = ['Comment Verified', 'Comment Detected', 'Verification Successful'].includes(statusStr) ? 'Verified' : 'Pending';
+      await db.query(`
+        INSERT INTO student_activities (user_id, task_engagement_id, status, created_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, task_engagement_id) DO UPDATE SET status = $3
+      `, [userId, engagementId, saStatus]);
+    };
+
     // 5. If handle is not available
     if (platform === 'YouTube' && (!user.youtube_handle || user.youtube_handle.trim() === '')) {
       const status = 'YouTube Account Not Available';
-      await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+      await updateActivityState(status);
       logDiagnostic({ ...diagBase, status: status, reason: 'No YouTube handle set in profile' });
       return res.json({
         message: 'Please add your YouTube handle in Profile Settings before using comment verification.',
@@ -677,7 +848,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
     }
 
     if (platform !== 'YouTube' && platform !== 'Facebook' && (!handle || handle.trim() === '')) {
-      await db.query("UPDATE task_activity SET comment_status = 'Platform Not Available' WHERE user_id = $1 AND task_id = $2", [userId, taskId]);
+      await updateActivityState('Platform Not Available');
       return res.json({
         message: `Your ${platform} handle/profile is not configured. Please add it in Profile settings.`,
         comment_status: 'Platform Not Available'
@@ -686,7 +857,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
     if (platform === 'Facebook' && (!handle || handle.trim() === '')) {
       const status = 'Facebook Account Not Available';
-      await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+      await updateActivityState(status);
       logDiagnostic({ ...diagBase, status: status, reason: 'No Facebook Display Name set in profile' });
       return res.status(400).json({
         message: 'Please add your exact Facebook Display Name in Profile Settings before using comment verification.',
@@ -698,7 +869,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
     if (platform === 'YouTube') {
       if (!socialLink || socialLink.trim() === '') {
         const status = 'Video ID Extraction Failed';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, status: status, reason: 'Task URL is empty or invalid' });
         return res.json({ message: 'Verification Error: Invalid URL.', comment_status: status });
       }
@@ -706,7 +877,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       const videoId = getYouTubeVideoId(socialLink);
       if (!videoId) {
         const status = 'Video ID Extraction Failed';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, status: status, reason: 'Regex could not find 11-char video ID' });
         return res.json({ message: 'Failed to extract a valid YouTube video ID from the task link.', comment_status: status });
       }
@@ -722,7 +893,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       if (!apiKey) {
         verificationSource = 'CONFIGURATION_ERROR';
         const status = 'Configuration Error';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, verificationSource, status: status, reason: 'YouTube API Key is missing from configuration' });
         return res.json({
           message: 'YouTube Comment Verification is not configured. Missing YOUTUBE_API_KEY.',
@@ -766,7 +937,12 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
            userMessage = 'A network error occurred while contacting YouTube API.';
         }
 
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        try {
+          await updateActivityState(status);
+        } catch (dbErr) {
+          global.lastDatabaseError = { message: dbErr.message, code: dbErr.code, detail: dbErr.detail };
+          throw dbErr;
+        }
         
         logDiagnostic({ 
           ...diagBase, 
@@ -785,7 +961,12 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
       if (!comments || comments.length === 0) {
         const status = 'No Comments Available';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        try {
+          await updateActivityState(status);
+        } catch (dbErr) {
+          global.lastDatabaseError = { message: dbErr.message, code: dbErr.code, detail: dbErr.detail };
+          throw dbErr;
+        }
 
         logDiagnostic({ ...diagBase, verificationSource, retrievedCommentsCount: 0, status: status, reason: 'YouTube API returned an empty list of comments for this video' });
         return res.json({ 
@@ -810,10 +991,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
           if (isMatch) {
             matchedAuthor = authorName;
             commentFound = true;
-            console.log(`\n[Author Matching Validation]\nStored YouTube Handle: ${user.youtube_handle}\nDetected Comment Author: ${authorName}\nNormalized Values: Stored(${cleanB}) vs Detected(${cleanA})\nMatch Result: TRUE`);
             break;
-          } else {
-            console.log(`[Author Matching Validation]\nStored YouTube Handle: ${user.youtube_handle}\nDetected Comment Author: ${authorName}\nNormalized Values: Stored(${cleanB}) vs Detected(${cleanA})\nMatch Result: FALSE`);
           }
         }
       }
@@ -822,17 +1000,31 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
       if (commentFound) {
         const status = 'Comment Verified';
-        const awarded = await awardCommentPoints(userId, taskId, status);
-        if (!awarded) {
-          return res.status(409).json({ error: 'Comment points have already been awarded for this task.' });
+        const client = await db.pool.connect();
+        try {
+          await client.query('BEGIN');
+          if (engagement.points > 0) {
+            await client.query('UPDATE users SET points = points + $1 WHERE id = $2', [engagement.points, userId]);
+          }
+          await client.query(`
+            INSERT INTO student_activities (user_id, task_engagement_id, status, created_at, completed_at)
+            VALUES ($1, $2, 'Verified', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, task_engagement_id) DO UPDATE SET status = 'Verified', completed_at = CURRENT_TIMESTAMP
+          `, [userId, engagementId]);
+          await client.query('COMMIT');
+        } catch (txnErr) {
+          await client.query('ROLLBACK');
+          throw txnErr;
+        } finally {
+          client.release();
         }
 
         logDiagnostic({ ...diagBase, verificationSource, matchResult: true, status: status, reason: `Successfully matched comment from ${matchedAuthor}` });
 
-        return res.json({ message: 'Comment successfully verified! +5 Points awarded.', comment_status: status });
+        return res.json({ message: `Comment successfully verified! +${engagement.points} Points awarded.`, comment_status: status });
       } else {
         const status = 'Comment Not Found';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         
         logDiagnostic({ ...diagBase, verificationSource, matchResult: false, status: status, reason: 'No matching comment found for your handle' });
 
@@ -844,7 +1036,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
     } else if (platform === 'Facebook') {
       if (!checkRateLimit(userId, taskId)) {
         const status = 'Rate Limited';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, status: status, reason: 'Exceeded 3 attempts per 5 minutes' });
         return res.status(429).json({ message: 'Too many verification attempts. Please wait 5 minutes.', comment_status: status });
       }
@@ -852,7 +1044,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       const postId = extractFacebookPostId(socialLink);
       if (!postId) {
         const status = 'Post ID Extraction Failed';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, status: status, reason: 'Could not extract Post ID from URL' });
         return res.status(400).json({ message: 'Verification Error: Invalid Facebook URL or unsupported post format.', comment_status: status });
       }
@@ -860,7 +1052,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       const fbToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
       if (!fbToken) {
         const status = 'Configuration Error';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, status: status, reason: 'Missing FACEBOOK_PAGE_ACCESS_TOKEN' });
         return res.status(503).json({ message: 'Facebook Comment Verification is not configured on the server.', comment_status: status });
       }
@@ -872,7 +1064,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
       } catch (netErr) {
         await db.query("INSERT INTO facebook_api_usage (request_type, quota_cost, status, response_code, error_message) VALUES ($1, $2, $3, $4, $5)", ['GET comments', 1, 'failed', null, netErr.message]).catch(() => {});
         const status = 'Facebook API Error';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         return res.status(500).json({ message: 'Network error connecting to Facebook API.', comment_status: status });
       }
 
@@ -901,7 +1093,7 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
           httpCode = 503;
           userMessage = 'Facebook API Token or configuration is invalid.';
         }
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, status: status, reason: fbData.error?.message || 'API Error' });
         return res.status(httpCode).json({ message: userMessage, comment_status: status });
       }
@@ -929,27 +1121,73 @@ router.post('/tasks/:id/verify-comment', async (req, res) => {
 
       if (matchFound) {
         const status = 'Comment Verified';
-        const awarded = await awardCommentPoints(userId, taskId, status);
-        if (!awarded) {
-          return res.status(409).json({ error: 'Comment points have already been awarded for this task.' });
+        const client = await db.pool.connect();
+        try {
+          await client.query('BEGIN');
+          if (engagement.points > 0) {
+            await client.query('UPDATE users SET points = points + $1 WHERE id = $2', [engagement.points, userId]);
+          }
+          await client.query(`
+            INSERT INTO student_activities (user_id, task_engagement_id, status, created_at, completed_at)
+            VALUES ($1, $2, 'Verified', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, task_engagement_id) DO UPDATE SET status = 'Verified', completed_at = CURRENT_TIMESTAMP
+          `, [userId, engagementId]);
+          await client.query('COMMIT');
+        } catch (txnErr) {
+          await client.query('ROLLBACK');
+          throw txnErr;
+        } finally {
+          client.release();
         }
         logDiagnostic({ ...diagBase, matchResult: true, status: status, reason: `Successfully matched comment from ${matchedAuthor}` });
-        return res.json({ message: 'Comment successfully verified! +5 Points awarded.', comment_status: status });
+        return res.json({ message: `Comment successfully verified! +${engagement.points} Points awarded.`, comment_status: status });
       } else {
         const status = 'Comment Not Found';
-        await db.query("UPDATE task_activity SET comment_status = $1 WHERE user_id = $2 AND task_id = $3", [status, userId, taskId]);
+        await updateActivityState(status);
         logDiagnostic({ ...diagBase, matchResult: false, status: status, reason: 'No matching comment found for your display name' });
         return res.status(404).json({ message: 'No matching comment found for your exact Facebook Display Name.', comment_status: status });
       }
 
+    } else if (platform === 'Instagram') {
+      return res.status(400).json({ message: 'Automatic comment verification is not available for Instagram. Please use the manual declaration flow.', comment_status: 'Manual Required' });
     } else {
-      await db.query("UPDATE task_activity SET comment_status = 'Comment Not Verified' WHERE user_id = $1 AND task_id = $2", [userId, taskId]);
+      await updateActivityState('Comment Not Verified');
       return res.json({ message: `Automatic comment verification is not available for ${platform}.`, comment_status: 'Comment Not Verified' });
     }
 
   } catch (error) {
-    console.error('Comment verification failed:', error);
-    res.status(500).json({ error: 'Failed to verify comment. Please try again later.' });
+    console.error('\n--- DATABASE ERROR IN VERIFICATION ---');
+    console.error('Full Error Message:', error.message);
+    console.error('Error Code:', error.code);
+    console.error('Stack Trace:', error.stack);
+    
+    global.lastDatabaseError = global.lastDatabaseError || { message: error.message, code: error.code };
+    
+    res.status(500).json({ 
+      error: 'Failed to verify comment. Database error.',
+      pgError: error.message,
+      pgCode: error.code,
+      failingQuery: 'See server logs for query detail'
+    });
+  }
+});
+
+router.get('/system/verification-debug', async (req, res) => {
+  try {
+    const result = await db.query('SELECT status FROM verification_audit_logs ORDER BY timestamp DESC LIMIT 1');
+    res.json({
+      verificationStage: result.rows.length > 0 ? result.rows[0].status : 'None',
+      databaseStatus: global.lastDatabaseError ? 'Error' : 'OK',
+      lastVerificationError: global.lastDatabaseError,
+      lastFailedQuery: global.lastDatabaseQuery
+    });
+  } catch (err) {
+    res.json({
+      verificationStage: 'Error fetching logs',
+      databaseStatus: 'Error',
+      lastVerificationError: err.message,
+      lastFailedQuery: null
+    });
   }
 });
 
