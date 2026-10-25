@@ -1,7 +1,5 @@
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
-
-const JWT_SECRET = process.env.JWT_SECRET || 'engagehub_super_secret_key_123_!@#';
+const { jwtSecret } = require('./config');
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -11,7 +9,7 @@ function authenticateToken(req, res, next) {
     return res.status(401).json({ error: 'Access token required. Please login.' });
   }
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, jwtSecret, (err, user) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token. Please login again.' });
     }
