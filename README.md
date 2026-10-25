@@ -10,6 +10,16 @@ Vinculo is a Node.js and Express application backed by PostgreSQL. It serves the
 
 The app checks and applies its safe schema updates before it starts listening. It only inserts sample data when it sees a brand-new database with none of the core tables. `npm run db:init` is also available for database setup; it does not drop tables and skips sample data when users, tasks, or task activities already exist.
 
+## Engagement data migration
+
+The manual engagement model can be populated from the legacy `task_activity` table with:
+
+```bash
+psql "$DATABASE_URL" -f scripts/migrate_phase1.sql
+```
+
+Create a Supabase backup or use a staging database before running it. The migration is non-destructive: it keeps `task_activity`, creates a backup copy named `task_activity_legacy`, and uses `vinculo_migrations` to make repeat runs safe. It does not recreate or drop `manual_audits`, `manual_audit_history`, or any other production table. Review the resulting engagement and activity counts before switching production traffic.
+
 ## Debug common failures
 
 - **The server exits before listening:** check that `DATABASE_URL` is valid and reachable, and that `JWT_SECRET` is set. Startup logs identify schema or connection failures; the app exits instead of serving requests with an incomplete schema.

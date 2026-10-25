@@ -7,9 +7,8 @@ async function runTestInit() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   try {
     const client = await pool.connect();
-    console.log('Connected to database. Running raw schema.sql and seed.sql...');
+    console.log('Connected to database. Running schema.sql and seed.sql for a disposable test database...');
     
-    // In order to drop tables, we just run schema.sql since it has DROP IF EXISTS
     const schemaSql = fs.readFileSync(path.join(__dirname, '..', 'schema.sql'), 'utf8');
     await client.query(schemaSql);
     console.log('schema.sql executed.');
