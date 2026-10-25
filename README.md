@@ -5,7 +5,7 @@ Vinculo is a Node.js and Express application backed by PostgreSQL. It serves the
 ## Run locally
 
 1. Install the locked dependencies with `npm ci`.
-2. Configure `.env` with `DATABASE_URL` and a strong `JWT_SECRET`. `YOUTUBE_API_KEY`, `FACEBOOK_PAGE_ACCESS_TOKEN`, and `PORT` are optional settings for their related integrations and server port.
+2. Configure `.env` with `DATABASE_URL` and a strong `JWT_SECRET`. `FRONTEND_ORIGINS` is an optional comma-separated list of allowed browser origins; when omitted, only the local server origins for `PORT` are allowed. `YOUTUBE_API_KEY`, `FACEBOOK_PAGE_ACCESS_TOKEN`, and `PORT` are optional settings for their related integrations and server port.
 3. Start the app with `npm start`.
 
 The app checks and applies its safe schema updates before it starts listening. It only inserts sample data when it sees a brand-new database with none of the core tables. `npm run db:init` is also available for database setup; it does not drop tables and skips sample data when users, tasks, or task activities already exist.

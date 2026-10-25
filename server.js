@@ -23,10 +23,26 @@ const studentRouter = require('./routes/student');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || `http://localhost:${PORT},http://127.0.0.1:${PORT}`)
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
+app.use(cors({
+  origin: (origin, callback) => {
+    callback(null, !origin || allowedOrigins.includes(origin));
+  },
+  credentials: true
+}));
+app.use(express.json({ limit: '100kb' }));
 
 // Log incoming requests for development debugging
 app.use((req, res, next) => {
