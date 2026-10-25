@@ -134,6 +134,8 @@ async function checkAndInitializeDatabase() {
 
     console.log('Ensuring database constraints are up-to-date...');
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS facebook_display_name VARCHAR(255) DEFAULT NULL;`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS supabase_user_id UUID UNIQUE;`);
+    await pool.query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
     await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS points INTEGER NOT NULL DEFAULT 10;`);
     await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'CREATED';`);
     await pool.query(`

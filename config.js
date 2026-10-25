@@ -1,9 +1,10 @@
 require('dotenv').config();
 
-const jwtSecret = process.env.JWT_SECRET;
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 
-if (!jwtSecret) {
-  throw new Error('JWT_SECRET must be configured before the application can start.');
+if (!supabaseUrl || !supabasePublishableKey) {
+  throw new Error('SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured before the application can start.');
 }
 
-module.exports = { jwtSecret };
+module.exports = { supabaseUrl, supabasePublishableKey };
