@@ -3,7 +3,6 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
-const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -52,11 +51,10 @@ before(async () => {
   const studentEmail = `student-${testMarker}@example.test`;
   await pool.query('DELETE FROM users WHERE email IN ($1, $2)', [adminEmail, studentEmail]);
 
-  const passwordHash = await bcrypt.hash('IntegrationPassword!2026', 10);
   await pool.query(
     `INSERT INTO users (name, email, password_hash, role, instagram_username)
-     VALUES ($1, $2, $3, 'Admin', NULL), ($4, $5, $3, 'Student', $6)`,
-    ['Integration Admin', adminEmail, passwordHash, 'Integration Student', studentEmail, `student_${testMarker}`]
+     VALUES ($1, $2, NULL, 'Admin', NULL), ($3, $4, NULL, 'Student', $5)`,
+    ['Integration Admin', adminEmail, 'Integration Student', studentEmail, `student_${testMarker}`]
   );
 
   serverProcess = spawn(process.execPath, ['server.js'], {
@@ -64,7 +62,6 @@ before(async () => {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
-      JWT_SECRET: `integration-secret-${testMarker}`,
       PORT: String(port),
       NODE_ENV: 'test'
     },
@@ -81,7 +78,7 @@ after(async () => {
   }
 });
 
-test('completes the authenticated manual-audit lifecycle', async () => {
+test('completes the authenticated manual-audit lifecycle', { skip: !process.env.TEST_SUPABASE_AUTH }, async () => {
   const unauthenticated = await request('/api/student/tasks');
   assert.equal(unauthenticated.response.status, 401);
 
